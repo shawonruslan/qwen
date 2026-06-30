@@ -136,6 +136,8 @@ jobs:
                   parsedText += child.innerText || child.textContent || '';
                   parsedText += '\n';
                 }
+              }
+
               // Check for generated media inside lastMessage
               const mediaRenderers = lastMessage.querySelectorAll('.chat-response-media-render');
               mediaRenderers.forEach(renderer => {
