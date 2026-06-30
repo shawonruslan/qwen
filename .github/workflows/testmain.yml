@@ -109,36 +109,44 @@ jobs:
               if (messages.length === 0) return '';
               const lastMessage = messages[messages.length - 1];
 
-              const mdWrapper = lastMessage.querySelector('.qwen-markdown');
-              if (!mdWrapper) return lastMessage.innerText || '';
-
               let parsedText = '';
-              for (const child of mdWrapper.children) {
-                const codeBlock = child.classList.contains('qwen-markdown-code') ? child : child.querySelector('.qwen-markdown-code');
-                if (codeBlock || child.tagName === 'PRE') {
-                  const targetBlock = codeBlock || child;
-                  const langEl = targetBlock.querySelector('.qwen-markdown-code-header > div:first-child');
-                  const lang = langEl ? langEl.textContent.trim().toLowerCase() : '';
-                  
-                  const lineEls = targetBlock.querySelectorAll('.view-line');
-                  let codeLines = [];
-                  if (lineEls.length > 0) {
-                    lineEls.forEach(el => {
-                      codeLines.push(el.textContent);
-                    });
+
+              // 1. Scrape text content
+              const mdWrapper = lastMessage.querySelector('.qwen-markdown');
+              if (mdWrapper) {
+                for (const child of mdWrapper.children) {
+                  const codeBlock = child.classList.contains('qwen-markdown-code') ? child : child.querySelector('.qwen-markdown-code');
+                  if (codeBlock || child.tagName === 'PRE') {
+                    const targetBlock = codeBlock || child;
+                    const langEl = targetBlock.querySelector('.qwen-markdown-code-header > div:first-child');
+                    const lang = langEl ? langEl.textContent.trim().toLowerCase() : '';
+                    
+                    const lineEls = targetBlock.querySelectorAll('.view-line');
+                    let codeLines = [];
+                    if (lineEls.length > 0) {
+                      lineEls.forEach(el => {
+                        codeLines.push(el.textContent);
+                      });
+                    } else {
+                      const bodyEl = targetBlock.querySelector('.qwen-markdown-code-body');
+                      if (bodyEl) codeLines.push(bodyEl.innerText || bodyEl.textContent);
+                    }
+                    
+                    parsedText += `\n\`\`\`${lang}\n${codeLines.join('\n')}\n\`\`\`\n`;
                   } else {
-                    const bodyEl = targetBlock.querySelector('.qwen-markdown-code-body');
-                    if (bodyEl) codeLines.push(bodyEl.innerText || bodyEl.textContent);
+                    parsedText += child.innerText || child.textContent || '';
+                    parsedText += '\n';
                   }
-                  
-                  parsedText += `\n\`\`\`${lang}\n${codeLines.join('\n')}\n\`\`\`\n`;
-                } else {
-                  parsedText += child.innerText || child.textContent || '';
-                  parsedText += '\n';
                 }
+              } else {
+                const paragraphs = lastMessage.querySelectorAll('p');
+                paragraphs.forEach(p => {
+                  parsedText += p.innerText || p.textContent || '';
+                  parsedText += '\n';
+                });
               }
 
-              // Check for generated media inside lastMessage
+              // 2. Scrape media renders (independent of markdown text existence)
               const mediaRenderers = lastMessage.querySelectorAll('.chat-response-media-render');
               mediaRenderers.forEach(renderer => {
                 const imgs = renderer.querySelectorAll('img.qwen-image, img.ant-image-img');
