@@ -1,4 +1,4 @@
-name: Take Screenshot of Qwen Chat
+name: Qwen Chat - Image Paste Test
 on:
   workflow_dispatch:
 jobs:
@@ -19,14 +19,30 @@ jobs:
           npm install playwright
           npx playwright install --with-deps chromium
 
+      - name: Create test image
+        run: |
+          # Create a simple test PNG using a tiny base64-encoded image
+          python3 -c "
+          import base64
+          png_b64 = 'iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH5wEXDjQOTBz7iAAAB9pJREFUeNrtnXuMHVUZwH9z79277XbbpYWWl0DLG0RAQiOiQDQiCFFRiUIQNUaIRoGooSAEYqJBQCMRRSEoARWoiqEK+ABLeSiPlhfFQikt7Xa7u7t77+7e1zlz/eOcuZ29c+/u7u7M3LndX3Kzs2fmnPnmfPOd73znMRBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBCAEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQgghhBCAEAJ/8B5Tp1ZJZl7+AAAAAElFTkSuQmCC'
+          with open('test-screenshot.png', 'wb') as f:
+              f.write(base64.b64decode(png_b64))
+          "
+          ls -la test-screenshot.png
+
       - name: Create Playwright Automation Script
         run: |
-          cat << 'EOF' > login_and_screenshot.js
+          cat << 'EOF' > login_and_paste.js
           const { chromium } = require('playwright');
+          const fs = require('fs');
+          const path = require('path');
 
           (async () => {
             const browser = await chromium.launch();
-            const page = await browser.newPage();
+            const context = await browser.newContext({
+              permissions: ['clipboard-read', 'clipboard-write']
+            });
+            const page = await context.newPage();
 
             try {
               console.log('Navigating to auth page...');
@@ -48,13 +64,60 @@ jobs:
                 state: 'visible',
                 timeout: 20000
               });
-
-              // let the page settle
               await page.waitForTimeout(1000);
 
-              console.log('Typing "hi" into chat input...');
+              console.log('Reading test image into memory...');
+              const imagePath = path.resolve('test-screenshot.png');
+              const imageBuffer = fs.readFileSync(imagePath);
+              const base64Image = imageBuffer.toString('base64');
+
+              console.log('Simulating clipboard paste of image into chat input...');
               await textarea.click();
-              await textarea.fill('hi');
+
+              // Build a real ClipboardEvent with image data and dispatch it on the textarea,
+              // so the page's own paste-handler (the same one a real Ctrl+V would trigger) runs.
+              await page.evaluate(async ({ base64Image }) => {
+                const byteChars = atob(base64Image);
+                const byteNumbers = new Array(byteChars.length);
+                for (let i = 0; i < byteChars.length; i++) {
+                  byteNumbers[i] = byteChars.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], { type: 'image/png' });
+                const file = new File([blob], 'test-screenshot.png', { type: 'image/png' });
+
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(file);
+
+                const pasteEvent = new ClipboardEvent('paste', {
+                  clipboardData: dataTransfer,
+                  bubbles: true,
+                  cancelable: true
+                });
+
+                const target = document.querySelector('textarea.message-input-textarea');
+                target.dispatchEvent(pasteEvent);
+              }, { base64Image });
+
+              console.log('Waiting for image thumbnail to appear in input area...');
+              const imageAttached = await page.waitForSelector('.vision-item-image', {
+                state: 'visible',
+                timeout: 10000
+              }).then(() => true).catch(() => false);
+
+              if (!imageAttached) {
+                console.log('Synthetic paste event did not trigger upload — falling back to file input method...');
+                const fileInput = await page.$('#filesUpload');
+                await fileInput.setInputFiles(imagePath);
+                await page.waitForSelector('.vision-item-image', { state: 'visible', timeout: 15000 });
+                console.log('Image attached via file input fallback.');
+              } else {
+                console.log('Image attached via simulated paste.');
+              }
+
+              console.log('Typing prompt text...');
+              await textarea.click();
+              await textarea.fill('explain this image');
 
               console.log('Sending message...');
               const sendButton = await page.waitForSelector('button.send-button', {
@@ -68,15 +131,13 @@ jobs:
               await page.waitForSelector(assistantSelector, { timeout: 30000 });
 
               console.log('Waiting for response to finish streaming...');
-              // Poll until the assistant text stops changing (streaming finished)
               let previousText = '';
               let stableCount = 0;
-              const maxAttempts = 40; // ~20s max
-              for (let i = 0; i < maxAttempts; i++) {
+              for (let i = 0; i < 60; i++) { // up to ~30s
                 const currentText = await page.$eval(assistantSelector, el => el.textContent).catch(() => '');
                 if (currentText && currentText === previousText) {
                   stableCount++;
-                  if (stableCount >= 3) break; // stable for ~1.5s
+                  if (stableCount >= 3) break;
                 } else {
                   stableCount = 0;
                 }
@@ -86,21 +147,18 @@ jobs:
 
               const responseText = await page.$eval(assistantSelector, el => el.textContent).catch(() => '(no response captured)');
               console.log('=========================================');
-              console.log('Assistant response:');
+              console.log('Assistant response about the image:');
               console.log(responseText);
               console.log('=========================================');
 
-              // small buffer for any final UI settling
               await page.waitForTimeout(1000);
-
               console.log('Taking screenshot...');
               await page.screenshot({ path: 'screenshot.png' });
             } catch (error) {
               console.error('Something went wrong:', error);
-              console.log('Taking a fallback screenshot to see the error/captcha...');
               await page.screenshot({ path: 'screenshot.png', fullPage: true }).catch(() => {});
               const html = await page.content().catch(() => '');
-              require('fs').writeFileSync('page.html', html);
+              fs.writeFileSync('page.html', html);
               process.exit(1);
             } finally {
               await browser.close();
@@ -108,18 +166,19 @@ jobs:
           })();
           EOF
 
-      - name: Run Script to Login, Chat, and Screenshot
+      - name: Run Script - Login, Paste Image, Get Response
         env:
           USER_EMAIL: ${{ secrets.QWEN_EMAIL }}
           USER_PASSWORD: ${{ secrets.QWEN_PASSWORD }}
-        run: node login_and_screenshot.js
+        run: node login_and_paste.js
 
-      - name: Upload Screenshot and Debug HTML as Artifacts
+      - name: Upload Screenshot and Debug Files as Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qwen-screenshot
+          name: qwen-image-test
           path: |
             screenshot.png
             page.html
+            test-screenshot.png
           if-no-files-found: ignore
