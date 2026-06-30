@@ -59,36 +59,7 @@ jobs:
           USER_PASSWORD: ${{ secrets.QWEN_PASSWORD }}
         run: node login_and_screenshot.js
 
-      - name: Upload Screenshot via catbox.moe
-        if: always()
-        run: |
-          if [ -f screenshot.png ]; then
-            echo "Uploading to catbox.moe..."
-
-            HTTP_CODE=$(curl -s -w "%{http_code}" -o response.txt \
-              -F "reqtype=fileupload" \
-              -F "fileToUpload=@screenshot.png" \
-              https://catbox.moe/user/api.php)
-
-            RESPONSE_BODY=$(cat response.txt)
-
-            echo "=========================================="
-            echo "HTTP status: $HTTP_CODE"
-            echo "Response body: $RESPONSE_BODY"
-
-            if [ "$HTTP_CODE" -eq 200 ] && [[ "$RESPONSE_BODY" == http* ]]; then
-              echo "✅ Screenshot uploaded successfully!"
-              echo "🔗 View your image here:"
-              echo "$RESPONSE_BODY"
-            else
-              echo "❌ Upload failed or returned unexpected response."
-            fi
-            echo "=========================================="
-          else
-            echo "❌ Screenshot file not found."
-          fi
-
-      - name: Upload Screenshot as Artifact (fallback)
+      - name: Upload Screenshot as Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
