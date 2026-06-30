@@ -256,17 +256,54 @@ jobs:
             }
           }
 
+          async function setQwenMode(mode) {
+            if (!mode) return;
+            const targetMode = mode.charAt(0).toUpperCase() + mode.slice(1).toLowerCase();
+            if (!["Auto", "Thinking", "Fast"].includes(targetMode)) return;
+
+            console.log(`⚙️ Checking/Switching Qwen mode to: ${targetMode}`);
+            try {
+              const currentMode = await page.evaluate(() => {
+                const el = document.querySelector('.qwen-select-option-selected-label');
+                return el ? el.textContent.trim() : '';
+              }).catch(() => '');
+
+              console.log(`    Current Qwen mode is: ${currentMode}`);
+              if (currentMode === targetMode) {
+                console.log(`    Already in ${targetMode} mode. Skipping switch.`);
+                return;
+              }
+
+              const selector = '.ant-select-selector';
+              await page.waitForSelector(selector, { timeout: 10000 });
+              await page.click(selector);
+              await sleep(1000);
+
+              const optionSel = `.ant-select-item-option[title="${targetMode}"]`;
+              await page.waitForSelector(optionSel, { timeout: 10000 });
+              await page.click(optionSel);
+              await sleep(1000);
+
+              await takeScreenshot(`mode_switched_to_${targetMode}`);
+              console.log(`✅ Successfully switched mode to ${targetMode}`);
+            } catch (e) {
+              console.log(`⚠️ Failed to switch Qwen mode: ${e.message}`);
+              try { await page.keyboard.press('Escape'); } catch (_) {}
+            }
+          }
+
           app.get('/health', (req, res) => {
             res.json({ status: 'ok', timestamp: new Date().toISOString() });
           });
 
           const handleChat = async (req, res) => {
-            const { prompt, image_base64 } = req.body;
+            const { prompt, image_base64, mode } = req.body;
             if (!prompt) return res.status(400).json({ error: "Prompt is required" });
 
             res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Cache-Control', 'no-cache, no-transform');
             res.setHeader('Connection', 'keep-alive');
+            res.setHeader('X-Accel-Buffering', 'no');
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.flushHeaders();
 
@@ -293,22 +330,22 @@ jobs:
                 send({ type: 'info', text: `✅ Image uploaded via: ${uploadResult.strategy}` });
               }
 
+              if (mode) {
+                send({ type: 'info', text: `⚙️ Configuring Qwen mode to: ${mode}...` });
+                await setQwenMode(mode);
+              }
+
               const prevCount = await getResponseCount();
               console.log(`📊 Previous response count: ${prevCount}`);
 
               const inputSel = 'textarea.message-input-textarea';
               await page.waitForSelector(inputSel, { timeout: 20000 });
-              await page.click(inputSel, { force: true });
-              await sleep(200);
-              await page.keyboard.press('Control+a');
-              await page.keyboard.press('Delete');
-              await sleep(300);
-              await page.keyboard.insertText(prompt);
+              await page.fill(inputSel, prompt);
               await sleep(600);
               await takeScreenshot('prompt_before_submit');
 
               // Click send button
-              const sendButton = await page.waitForSelector('button.send-button', { state: 'visible', timeout: 5000 });
+              const sendButton = await page.waitForSelector('button.send-button', { state: 'visible', timeout: 10000 });
               await sendButton.click();
 
               send({ type: 'start' });
