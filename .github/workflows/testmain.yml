@@ -553,7 +553,8 @@ jobs:
           };
 
           app.post('/api/qwen', handleChat);
-          app.post('/api/gemini', handleChat); // Mirror path for backward compatibility
+          app.post('/api/gemini', handleChat);
+          app.post('/v1/chat/completions', handleOpenAI);
 
           process.on('SIGINT', async () => {
             if (browser) await browser.close().catch(() => {});
