@@ -99,16 +99,63 @@ jobs:
 
           async function getResponseCount() {
             return page.evaluate(() => {
-              return document.querySelectorAll('.qwen-chat-message-assistant .qwen-markdown-text').length;
+              return document.querySelectorAll('.qwen-chat-message-assistant').length;
             }).catch(() => 0);
           }
 
           async function getLastResponseText() {
             return page.evaluate(() => {
-              const els = document.querySelectorAll('.qwen-chat-message-assistant .qwen-markdown-text');
-              if (els.length === 0) return '';
-              const lastEl = els[els.length - 1];
-              return lastEl ? (lastEl.innerText || lastEl.textContent || '').trim() : '';
+              const messages = document.querySelectorAll('.qwen-chat-message-assistant');
+              if (messages.length === 0) return '';
+              const lastMessage = messages[messages.length - 1];
+
+              const mdWrapper = lastMessage.querySelector('.qwen-markdown');
+              if (!mdWrapper) return lastMessage.innerText || '';
+
+              let parsedText = '';
+              for (const child of mdWrapper.children) {
+                const codeBlock = child.classList.contains('qwen-markdown-code') ? child : child.querySelector('.qwen-markdown-code');
+                if (codeBlock || child.tagName === 'PRE') {
+                  const targetBlock = codeBlock || child;
+                  const langEl = targetBlock.querySelector('.qwen-markdown-code-header > div:first-child');
+                  const lang = langEl ? langEl.textContent.trim().toLowerCase() : '';
+                  
+                  const lineEls = targetBlock.querySelectorAll('.view-line');
+                  let codeLines = [];
+                  if (lineEls.length > 0) {
+                    lineEls.forEach(el => {
+                      codeLines.push(el.textContent);
+                    });
+                  } else {
+                    const bodyEl = targetBlock.querySelector('.qwen-markdown-code-body');
+                    if (bodyEl) codeLines.push(bodyEl.innerText || bodyEl.textContent);
+                  }
+                  
+                  parsedText += `\n\`\`\`${lang}\n${codeLines.join('\n')}\n\`\`\`\n`;
+                } else {
+                  parsedText += child.innerText || child.textContent || '';
+                  parsedText += '\n';
+                }
+              // Check for generated media inside lastMessage
+              const mediaRenderers = lastMessage.querySelectorAll('.chat-response-media-render');
+              mediaRenderers.forEach(renderer => {
+                const imgs = renderer.querySelectorAll('img.qwen-image, img.ant-image-img');
+                imgs.forEach(img => {
+                  if (img.src && !parsedText.includes(img.src)) {
+                    parsedText += `\n![Generated Image](${img.src})\n`;
+                  }
+                });
+
+                const vids = renderer.querySelectorAll('video');
+                vids.forEach(vid => {
+                  const src = vid.src || (vid.querySelector('source') ? vid.querySelector('source').src : '');
+                  if (src && !parsedText.includes(src)) {
+                    parsedText += `\n<video src="${src}"></video>\n`;
+                  }
+                });
+              });
+
+              return parsedText.trim();
             }).catch(() => '');
           }
 
@@ -304,12 +351,93 @@ jobs:
             }
           }
 
+          async function setQwenGenerationMode(type, ratio) {
+            if (!type || type === 'text') {
+              try {
+                const closeBtn = await page.$('.mode-select-current-mode-close');
+                if (closeBtn) {
+                  await closeBtn.click();
+                  await sleep(500);
+                  console.log("🧹 Reset Qwen generation mode to default (Text)");
+                }
+              } catch (_) {}
+              return;
+            }
+
+            const targetMode = type.toLowerCase() === 'image' ? 'Create Image' : 'Create Video';
+            console.log(`⚙️ Setting Qwen generation mode to: ${targetMode}`);
+
+            try {
+              const currentModeText = await page.evaluate(() => {
+                const el = document.querySelector('.mode-select-current-mode');
+                return el ? el.textContent.trim() : '';
+              }).catch(() => '');
+
+              if (currentModeText.includes(targetMode)) {
+                console.log(`    Already in ${targetMode} mode.`);
+              } else {
+                const closeBtn = await page.$('.mode-select-current-mode-close');
+                if (closeBtn) {
+                  await closeBtn.click();
+                  await sleep(500);
+                }
+
+                const trigger = await page.waitForSelector('.mode-select-open, .mode-select .ant-dropdown-trigger', { timeout: 10000 });
+                await trigger.click();
+                await sleep(800);
+
+                await page.evaluate((modeText) => {
+                  const items = Array.from(document.querySelectorAll('.ant-dropdown-menu-item'));
+                  const match = items.find(el => el.textContent.includes(modeText));
+                  if (match) {
+                    match.click();
+                    return true;
+                  }
+                  return false;
+                }, targetMode);
+                await sleep(1000);
+              }
+
+              if (ratio) {
+                console.log(`📐 Setting aspect ratio to: ${ratio}`);
+                const sizeSelector = await page.waitForSelector('.size-selector', { timeout: 8000 });
+                await sizeSelector.click();
+                await sleep(800);
+
+                const ratioSelected = await page.evaluate((ratioVal) => {
+                  const items = Array.from(document.querySelectorAll('.ant-dropdown-menu-item'));
+                  const match = items.find(el => {
+                    const text = el.textContent.trim();
+                    return text === ratioVal || text.startsWith(ratioVal + '\n') || text.startsWith(ratioVal);
+                  });
+                  if (match) {
+                    match.click();
+                    return true;
+                  }
+                  return false;
+                }, ratio);
+
+                if (ratioSelected) {
+                  console.log(`✅ Ratio set to ${ratio}`);
+                } else {
+                  console.log(`⚠️ Ratio option ${ratio} not found in dropdown.`);
+                  await page.keyboard.press('Escape');
+                }
+                await sleep(500);
+              }
+              await takeScreenshot(`generation_mode_${type}`);
+            } catch (e) {
+              console.log(`⚠️ Failed to set generation mode: ${e.message}`);
+              try { await page.keyboard.press('Escape'); } catch (_) {}
+            }
+          }
+
           app.get('/health', (req, res) => {
             res.json({ status: 'ok', timestamp: new Date().toISOString() });
           });
 
           const handleChat = async (req, res) => {
-            const { prompt, image_base64, mode } = req.body;
+            const { prompt, image_base64, mode, type, ratio } = req.body;
             if (!prompt) return res.status(400).json({ error: "Prompt is required" });
 
             res.setHeader('Content-Type', 'text/event-stream');
@@ -345,6 +473,11 @@ jobs:
               if (mode) {
                 send({ type: 'info', text: `⚙️ Configuring Qwen mode to: ${mode}...` });
                 await setQwenMode(mode);
+              }
+
+              if (type) {
+                send({ type: 'info', text: `⚙️ Configuring generation mode to: ${type} (${ratio || 'default ratio'})...` });
+                await setQwenGenerationMode(type, ratio);
               }
 
               const prevCount = await getResponseCount();
