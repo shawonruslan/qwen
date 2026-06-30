@@ -23,6 +23,7 @@ jobs:
         run: |
           cat << 'EOF' > login_and_screenshot.js
           const { chromium } = require('playwright');
+
           (async () => {
             const browser = await chromium.launch();
             const page = await browser.newPage();
@@ -43,21 +44,62 @@ jobs:
               ]);
 
               console.log('Waiting for chat input box to appear...');
-              await page.waitForSelector('textarea.message-input-textarea', {
+              const textarea = await page.waitForSelector('textarea.message-input-textarea', {
                 state: 'visible',
                 timeout: 20000
               });
 
-              // small buffer to let any animations/fonts settle
+              // let the page settle
               await page.waitForTimeout(1000);
 
-              console.log('Chat input ready. Taking screenshot...');
+              console.log('Typing "hi" into chat input...');
+              await textarea.click();
+              await textarea.fill('hi');
+
+              console.log('Sending message...');
+              const sendButton = await page.waitForSelector('button.send-button', {
+                state: 'visible',
+                timeout: 10000
+              });
+              await sendButton.click();
+
+              console.log('Waiting for assistant response to appear...');
+              const assistantSelector = '.qwen-chat-message-assistant .qwen-markdown-text';
+              await page.waitForSelector(assistantSelector, { timeout: 30000 });
+
+              console.log('Waiting for response to finish streaming...');
+              // Poll until the assistant text stops changing (streaming finished)
+              let previousText = '';
+              let stableCount = 0;
+              const maxAttempts = 40; // ~20s max
+              for (let i = 0; i < maxAttempts; i++) {
+                const currentText = await page.$eval(assistantSelector, el => el.textContent).catch(() => '');
+                if (currentText && currentText === previousText) {
+                  stableCount++;
+                  if (stableCount >= 3) break; // stable for ~1.5s
+                } else {
+                  stableCount = 0;
+                }
+                previousText = currentText;
+                await page.waitForTimeout(500);
+              }
+
+              const responseText = await page.$eval(assistantSelector, el => el.textContent).catch(() => '(no response captured)');
+              console.log('=========================================');
+              console.log('Assistant response:');
+              console.log(responseText);
+              console.log('=========================================');
+
+              // small buffer for any final UI settling
+              await page.waitForTimeout(1000);
+
+              console.log('Taking screenshot...');
               await page.screenshot({ path: 'screenshot.png' });
             } catch (error) {
               console.error('Something went wrong:', error);
               console.log('Taking a fallback screenshot to see the error/captcha...');
-              await page.screenshot({ path: 'screenshot.png', fullPage: true });
-              const html = await page.content();
+              await page.screenshot({ path: 'screenshot.png', fullPage: true }).catch(() => {});
+              const html = await page.content().catch(() => '');
               require('fs').writeFileSync('page.html', html);
               process.exit(1);
             } finally {
@@ -66,7 +108,7 @@ jobs:
           })();
           EOF
 
-      - name: Run Script to Login and Screenshot
+      - name: Run Script to Login, Chat, and Screenshot
         env:
           USER_EMAIL: ${{ secrets.QWEN_EMAIL }}
           USER_PASSWORD: ${{ secrets.QWEN_PASSWORD }}
