@@ -35,17 +35,30 @@ jobs:
               console.log('Filling credentials...');
               await page.fill('input[name="email"]', process.env.USER_EMAIL);
               await page.fill('input[name="password"]', process.env.USER_PASSWORD);
+
               console.log('Submitting form and waiting for redirect...');
               await Promise.all([
                 page.waitForURL('https://chat.qwen.ai/**', { waitUntil: 'load', timeout: 15000 }),
                 page.press('input[name="password"]', 'Enter')
               ]);
-              console.log('Success! Taking screenshot of the chat...');
+
+              console.log('Waiting for chat input box to appear...');
+              await page.waitForSelector('textarea.message-input-textarea', {
+                state: 'visible',
+                timeout: 20000
+              });
+
+              // small buffer to let any animations/fonts settle
+              await page.waitForTimeout(1000);
+
+              console.log('Chat input ready. Taking screenshot...');
               await page.screenshot({ path: 'screenshot.png' });
             } catch (error) {
               console.error('Something went wrong:', error);
               console.log('Taking a fallback screenshot to see the error/captcha...');
               await page.screenshot({ path: 'screenshot.png', fullPage: true });
+              const html = await page.content();
+              require('fs').writeFileSync('page.html', html);
               process.exit(1);
             } finally {
               await browser.close();
@@ -59,10 +72,12 @@ jobs:
           USER_PASSWORD: ${{ secrets.QWEN_PASSWORD }}
         run: node login_and_screenshot.js
 
-      - name: Upload Screenshot as Artifact
+      - name: Upload Screenshot and Debug HTML as Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: qwen-screenshot
-          path: screenshot.png
+          path: |
+            screenshot.png
+            page.html
           if-no-files-found: ignore
