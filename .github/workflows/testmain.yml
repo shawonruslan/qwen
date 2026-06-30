@@ -388,23 +388,13 @@ jobs:
               } else {
                 const closeBtn = await page.$('.mode-select-current-mode-close');
                 if (closeBtn) {
-                  await closeBtn.click();
-                  await sleep(500);
-                }
-
-                const trigger = await page.waitForSelector('.mode-select-open, .mode-select .ant-dropdown-trigger', { timeout: 10000 });
+                          const trigger = await page.waitForSelector('.mode-select-open, .mode-select .ant-dropdown-trigger', { timeout: 10000 });
                 await trigger.click();
                 await sleep(800);
 
-                await page.evaluate((modeText) => {
-                  const items = Array.from(document.querySelectorAll('.ant-dropdown-menu-item'));
-                  const match = items.find(el => el.textContent.includes(modeText));
-                  if (match) {
-                    match.click();
-                    return true;
-                  }
-                  return false;
-                }, targetMode);
+                // Click target option using native Playwright locator to trigger React event handlers
+                const option = page.locator('.ant-dropdown-menu-item').filter({ hasText: targetMode }).first();
+                await option.click();
                 await sleep(1000);
               }
 
@@ -414,23 +404,13 @@ jobs:
                 await sizeSelector.click();
                 await sleep(800);
 
-                const ratioSelected = await page.evaluate((ratioVal) => {
-                  const items = Array.from(document.querySelectorAll('.ant-dropdown-menu-item'));
-                  const match = items.find(el => {
-                    const text = el.textContent.trim();
-                    return text === ratioVal || text.startsWith(ratioVal + '\n') || text.startsWith(ratioVal);
-                  });
-                  if (match) {
-                    match.click();
-                    return true;
-                  }
-                  return false;
-                }, ratio);
-
-                if (ratioSelected) {
+                // Click target ratio using native Playwright locator to trigger React event handlers
+                try {
+                  const ratioOption = page.locator('.ant-dropdown-menu-item').filter({ hasText: ratio }).first();
+                  await ratioOption.click();
                   console.log(`✅ Ratio set to ${ratio}`);
-                } else {
-                  console.log(`⚠️ Ratio option ${ratio} not found in dropdown.`);
+                } catch (err) {
+                  console.log(`⚠️ Ratio option ${ratio} not found in dropdown: ${err.message}`);
                   await page.keyboard.press('Escape');
                 }
                 await sleep(500);
