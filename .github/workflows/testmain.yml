@@ -388,7 +388,11 @@ jobs:
               } else {
                 const closeBtn = await page.$('.mode-select-current-mode-close');
                 if (closeBtn) {
-                          const trigger = await page.waitForSelector('.mode-select-open, .mode-select .ant-dropdown-trigger', { timeout: 10000 });
+                  await closeBtn.click();
+                  await sleep(500);
+                }
+
+                const trigger = await page.waitForSelector('.mode-select-open, .mode-select .ant-dropdown-trigger', { timeout: 10000 });
                 await trigger.click();
                 await sleep(800);
 
