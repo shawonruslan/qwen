@@ -1,0 +1,494 @@
+name: 🚀 Qwen API Gateway via Cloudflare Tunnel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run-api-gateway:
+    name: 🌐 Launch Persistent Playwright Qwen API Server + Cloudflare Tunnel
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    steps:
+      - name: 📦 Checkout Repository Code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: 📦 Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 📥 Install Node Dependencies
+        run: |
+          npm init -y
+          npm install node-fetch@3 playwright express
+          npx playwright install chrome --with-deps
+
+      - name: 🖥️ Start Virtual Display (Xvfb)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xvfb ffmpeg
+          Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
+          sleep 3
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+          echo "✅ Xvfb started"
+
+      - name: 📥 Install Cloudflare Tunnel
+        run: |
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o cloudflared.deb
+          sudo dpkg -i cloudflared.deb
+          rm -f cloudflared.deb
+          cloudflared --version
+          echo "✅ cloudflared installed!"
+
+      - name: 🎥 Start Screen Recording
+        run: |
+          mkdir -p /tmp/recordings /tmp/screenshots
+          ffmpeg -f x11grab -r 10 -s 1920x1080 -i :99 \
+            -vcodec libx264 -preset ultrafast -crf 30 \
+            /tmp/recordings/session.mp4 > /tmp/ffmpeg.log 2>&1 &
+          echo $! > /tmp/ffmpeg.pid
+          echo "✅ Screen recording started"
+
+      - name: 🛠️ Create Qwen API Server
+        run: |
+          cat > api_server.mjs << 'SERVER_EOF'
+          import express from 'express';
+          import { chromium } from 'playwright';
+          import fs from 'fs';
+          import os from 'os';
+          import path from 'path';
+
+          const app = express();
+          app.use(express.json({ limit: '50mb' }));
+
+          let context, page;
+          const PORT = 3000;
+          let screenshotCount = 0;
+
+          const QWEN_EMAIL = process.env.QWEN_EMAIL || '';
+          const QWEN_PASSWORD = process.env.QWEN_PASSWORD || '';
+
+          function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+          async function takeScreenshot(label) {
+            try {
+              const filename = `/tmp/screenshots/${String(screenshotCount++).padStart(3,'0')}_${label}.png`;
+              await page.screenshot({ path: filename, fullPage: false });
+              console.log(`    📸 ${filename}`);
+            } catch (_) {}
+          }
+
+          async function getResponseCount() {
+            return page.evaluate(() => {
+              return document.querySelectorAll('.qwen-chat-message-assistant .qwen-markdown-text').length;
+            }).catch(() => 0);
+          }
+
+          async function getLastResponseText() {
+            return page.evaluate(() => {
+              const els = document.querySelectorAll('.qwen-chat-message-assistant .qwen-markdown-text');
+              if (els.length === 0) return '';
+              const lastEl = els[els.length - 1];
+              return lastEl ? (lastEl.innerText || lastEl.textContent || '').trim() : '';
+            }).catch(() => '');
+          }
+
+          async function dismissOverlays() {
+            try { await page.keyboard.press('Escape'); await sleep(300); } catch (_) {}
+          }
+
+          async function qwenLogin() {
+            console.log('🔐 Starting Qwen auto-login...');
+
+            await page.goto('https://chat.qwen.ai/auth', {
+              waitUntil: 'domcontentloaded',
+              timeout: 30000
+            });
+            await sleep(2000);
+            await takeScreenshot('login_01_start');
+
+            try {
+              await page.waitForSelector('input[name="email"]', { timeout: 10000 });
+              await page.fill('input[name="email"]', QWEN_EMAIL);
+              await page.fill('input[name="password"]', QWEN_PASSWORD);
+              await sleep(500);
+              await takeScreenshot('login_02_filled');
+              
+              console.log('    Submitting form and waiting for redirect...');
+              await Promise.all([
+                page.waitForURL('https://chat.qwen.ai/**', { waitUntil: 'load', timeout: 30000 }),
+                page.press('input[name="password"]', 'Enter')
+              ]);
+              await sleep(3000);
+              await takeScreenshot('login_03_after_submit');
+            } catch (e) {
+              console.error('❌ Login fields / submission failed:', e.message);
+              throw e;
+            }
+
+            // Verify login success: check if textarea.message-input-textarea exists
+            try {
+              await page.waitForSelector('textarea.message-input-textarea', { state: 'visible', timeout: 20000 });
+              console.log('✅ Qwen login successful!');
+            } catch (e) {
+              console.error('❌ Textarea not visible post-login. Check login_03_after_submit screenshot.');
+              throw e;
+            }
+          }
+
+          async function saveImage(image_base64) {
+            const buffer = Buffer.from(image_base64.replace(/^data:image\/\w+;base64,/, ""), 'base64');
+            const mimeMatch = image_base64.match(/^data:([^;]+);base64,/);
+            const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+            const ext = mime.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+            const localImagePath = path.join(os.tmpdir(), `upload_${Date.now()}.${ext}`);
+            fs.writeFileSync(localImagePath, buffer);
+            return localImagePath;
+          }
+
+          async function uploadImage(localImagePath) {
+            console.log(`    📎 Uploading: ${path.basename(localImagePath)}`);
+            await takeScreenshot('upload_01_before');
+
+            const textareaSel = 'textarea.message-input-textarea';
+            try {
+              const textarea = await page.waitForSelector(textareaSel, { timeout: 5000 });
+              await textarea.click();
+
+              const imageBuffer = fs.readFileSync(localImagePath);
+              const base64Image = imageBuffer.toString('base64');
+
+              // Simulate clipboard paste
+              await page.evaluate(async ({ base64Image }) => {
+                const byteChars = atob(base64Image);
+                const byteNumbers = new Array(byteChars.length);
+                for (let i = 0; i < byteChars.length; i++) {
+                  byteNumbers[i] = byteChars.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], { type: 'image/png' });
+                const file = new File([blob], 'upload.png', { type: 'image/png' });
+
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(file);
+
+                const pasteEvent = new ClipboardEvent('paste', {
+                  clipboardData: dataTransfer,
+                  bubbles: true,
+                  cancelable: true
+                });
+
+                const target = document.querySelector('textarea.message-input-textarea');
+                target.dispatchEvent(pasteEvent);
+              }, { base64Image });
+
+              await sleep(2000);
+              const imageAttached = await page.waitForSelector('.vision-item-image', {
+                state: 'visible',
+                timeout: 8000
+              }).then(() => true).catch(() => false);
+
+              if (imageAttached) {
+                console.log('    ✅ Image uploaded via simulated paste');
+                await takeScreenshot('upload_02_paste_success');
+                return { success: true, strategy: 'Clipboard Paste' };
+              }
+            } catch (e) {
+              console.log(`    ⚠️ Clipboard paste strategy failed: ${e.message}`);
+            }
+
+            // Fallback to standard input file element
+            try {
+              console.log('    🔄 Strategy Fallback: File Input...');
+              const fileInput = await page.$('#filesUpload');
+              if (fileInput) {
+                await fileInput.setInputFiles(localImagePath);
+                await page.waitForSelector('.vision-item-image', { state: 'visible', timeout: 15000 });
+                console.log('    ✅ Image uploaded via input file fallback');
+                await takeScreenshot('upload_02_input_success');
+                return { success: true, strategy: 'File Input Fallback' };
+              }
+            } catch (e) {
+              console.log(`    ❌ File input fallback failed: ${e.message}`);
+            }
+
+            await takeScreenshot('upload_failed');
+            return { success: false, strategy: 'none' };
+          }
+
+          async function initQwen() {
+            console.log("⚡ Launching Chrome...");
+            try {
+              context = await chromium.launch({
+                headless: false,
+                channel: 'chrome',
+                args: [
+                  '--no-sandbox',
+                  '--disable-setuid-sandbox',
+                  '--disable-dev-shm-usage',
+                  '--disable-blink-features=AutomationControlled',
+                  '--disable-web-security',
+                  '--window-size=1920,1080'
+                ]
+              });
+
+              page = await context.newPage();
+              await page.setViewportSize({ width: 1920, height: 1080 });
+              await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
+              await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+
+              await qwenLogin();
+              await takeScreenshot('00_qwen_ready');
+              console.log("✅ Qwen Ready!");
+            } catch (err) {
+              console.error("❌ Failed to initialize Qwen:", err.message);
+              process.exit(1);
+            }
+          }
+
+          app.get('/health', (req, res) => {
+            res.json({ status: 'ok', timestamp: new Date().toISOString() });
+          });
+
+          const handleChat = async (req, res) => {
+            const { prompt, image_base64 } = req.body;
+            if (!prompt) return res.status(400).json({ error: "Prompt is required" });
+
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.flushHeaders();
+
+            const keepalive = setInterval(() => {
+              try { res.write(': ping\n\n'); } catch (_) {}
+            }, 15000);
+
+            const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+            let localImagePath = null;
+            try {
+              try { await page.keyboard.press('Escape'); await sleep(300); } catch (_) {}
+
+              if (image_base64) {
+                localImagePath = await saveImage(image_base64);
+                send({ type: 'info', text: '📎 Uploading image to Qwen...' });
+                const uploadResult = await uploadImage(localImagePath);
+                if (!uploadResult.success) {
+                  send({ type: 'error', error: '❌ Failed to upload image' });
+                  clearInterval(keepalive);
+                  res.end();
+                  return;
+                }
+                send({ type: 'info', text: `✅ Image uploaded via: ${uploadResult.strategy}` });
+              }
+
+              const prevCount = await getResponseCount();
+              console.log(`📊 Previous response count: ${prevCount}`);
+
+              const inputSel = 'textarea.message-input-textarea';
+              await page.waitForSelector(inputSel, { timeout: 20000 });
+              await page.click(inputSel, { force: true });
+              await sleep(200);
+              await page.keyboard.press('Control+a');
+              await page.keyboard.press('Delete');
+              await sleep(300);
+              await page.keyboard.insertText(prompt);
+              await sleep(600);
+              await takeScreenshot('prompt_before_submit');
+
+              // Click send button
+              const sendButton = await page.waitForSelector('button.send-button', { state: 'visible', timeout: 5000 });
+              await sendButton.click();
+
+              send({ type: 'start' });
+              console.log(`📤 Prompt sent: ${prompt.substring(0, 50)}...`);
+
+              const deadline = Date.now() + 180000;
+              let newResponseAppeared = false;
+
+              while (Date.now() < deadline) {
+                await sleep(500);
+                const currentCount = await getResponseCount();
+                if (currentCount > prevCount) {
+                  newResponseAppeared = true;
+                  console.log(`✅ New response detected! Count: ${currentCount}`);
+                  break;
+                }
+              }
+
+              if (!newResponseAppeared) {
+                await takeScreenshot('no_response');
+                send({ type: 'error', error: 'No response from Qwen' });
+                clearInterval(keepalive);
+                res.end();
+                return;
+              }
+
+              let lastSentText = '';
+              let lastSeenText = '';
+              let stableCount = 0;
+
+              while (Date.now() < deadline) {
+                await sleep(300);
+                const latestText = await getLastResponseText();
+                if (!latestText) continue;
+
+                if (latestText.length > lastSentText.length) {
+                  const delta = latestText.slice(lastSentText.length);
+                  send({ type: 'delta', text: delta });
+                  lastSentText = latestText;
+                  lastSeenText = latestText;
+                  stableCount = 0;
+                } else if (latestText === lastSeenText) {
+                  stableCount++;
+                  if (stableCount >= 8) break;
+                } else {
+                  lastSeenText = latestText;
+                  stableCount = 0;
+                }
+              }
+
+              await takeScreenshot('response_complete');
+              send({ type: 'done', full_response: lastSentText });
+              console.log("✅ Response complete!");
+
+            } catch (err) {
+              console.error("❌ Error during chat processing:", err.message);
+              await takeScreenshot('error_state');
+              send({ type: 'error', error: err.message });
+            } finally {
+              clearInterval(keepalive);
+              res.end();
+              if (localImagePath && fs.existsSync(localImagePath)) {
+                try { fs.unlinkSync(localImagePath); } catch (_) {}
+              }
+            }
+          };
+
+          app.post('/api/qwen', handleChat);
+          app.post('/api/gemini', handleChat); // Mirror path for backward compatibility
+
+          process.on('SIGINT', async () => {
+            if (context) await context.close().catch(() => {});
+            process.exit(0);
+          });
+
+          app.listen(PORT, '127.0.0.1', async () => {
+            console.log(`🚀 Starting API Server on port ${PORT}...`);
+            await initQwen();
+            console.log(`🤖 API Server ready at http://127.0.0.1:${PORT}`);
+          });
+          SERVER_EOF
+          echo "✅ API Server script created!"
+
+      - name: 🌐 Start Tunnel & Publish URL to Central Repo
+        env:
+          DISPLAY: :99
+          CENTRAL_REPO_TOKEN: ${{ secrets.CENTRAL_REPO_TOKEN }}
+          QWEN_EMAIL: ${{ secrets.QWEN_EMAIL }}
+          QWEN_PASSWORD: ${{ secrets.QWEN_PASSWORD }}
+        run: |
+          echo "🌐 Starting Cloudflare Quick Tunnel..."
+          cloudflared tunnel --url http://127.0.0.1:3000 \
+            --no-autoupdate \
+            --loglevel info \
+            2>&1 | tee cloudflare.log &
+
+          echo "⏳ Waiting for tunnel URL..."
+          TUNNEL_URL=""
+          for i in $(seq 1 30); do
+            sleep 2
+            TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9\-]+\.trycloudflare\.com' cloudflare.log | head -1)
+            if [ -n "$TUNNEL_URL" ]; then
+              break
+            fi
+            echo "⏳ Attempt $i/30..."
+          done
+
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "❌ Failed to get tunnel URL"
+            cat cloudflare.log
+            exit 1
+          fi
+
+          echo "✅ Tunnel URL: $TUNNEL_URL"
+
+          CENTRAL_REPO="jahid12525/gemini-url"
+          FILE_PATH="tunnel_url.txt"
+          API_URL="https://api.github.com/repos/$CENTRAL_REPO/contents/$FILE_PATH"
+
+          API_RESPONSE=$(curl -s \
+            -H "Authorization: token $CENTRAL_REPO_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "$API_URL")
+
+          SHA=$(echo "$API_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha',''))" 2>/dev/null || echo "")
+
+          echo "📋 SHA: $SHA"
+          CONTENT=$(echo -n "$TUNNEL_URL" | base64 -w 0)
+
+          if [ -n "$SHA" ]; then
+            PAYLOAD="{\"message\":\"Update tunnel URL [skip ci]\",\"content\":\"${CONTENT}\",\"sha\":\"${SHA}\"}"
+          else
+            PAYLOAD="{\"message\":\"Create tunnel URL [skip ci]\",\"content\":\"${CONTENT}\"}"
+          fi
+
+          HTTP_STATUS=$(curl -s -o push_result.json -w "%{http_code}" -X PUT \
+            -H "Authorization: token $CENTRAL_REPO_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$API_URL")
+
+          if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "201" ]; then
+            echo "✅ tunnel_url.txt updated in central repo!"
+          else
+            echo "❌ Failed to update central repo (HTTP $HTTP_STATUS)"
+            cat push_result.json
+            exit 1
+          fi
+
+          echo "=============================================="
+          echo "✅ CLOUDFLARE TUNNEL IS LIVE!"
+          echo "🔗 PUBLIC URL  : $TUNNEL_URL"
+          echo "📡 API Endpoint: $TUNNEL_URL/api/qwen"
+          echo "❤️  Health Check: $TUNNEL_URL/health"
+          echo "📌 FIXED URL   : https://raw.githubusercontent.com/$CENTRAL_REPO/main/$FILE_PATH"
+          echo "=============================================="
+
+          node api_server.mjs
+
+      - name: 🛑 Stop Screen Recording
+        if: always()
+        run: |
+          if [ -f /tmp/ffmpeg.pid ]; then
+            kill $(cat /tmp/ffmpeg.pid) 2>/dev/null || true
+            sleep 3
+            echo "✅ Recording stopped"
+          fi
+
+      - name: 📸 Upload Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: /tmp/screenshots/
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: 🎥 Upload Screen Recording
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-recording
+          path: /tmp/recordings/
+          if-no-files-found: warn
+          retention-days: 3
