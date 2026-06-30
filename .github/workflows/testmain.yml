@@ -109,68 +109,44 @@ jobs:
               if (messages.length === 0) return '';
               const lastMessage = messages[messages.length - 1];
 
+              let parsedText = '';
+
+              // 1. Scrape text content
               const mdWrapper = lastMessage.querySelector('.qwen-markdown');
-              if (!mdWrapper) return lastMessage.innerText || '';
-
-              const standardHtmlTags = new Set([
-                'div', 'p', 'span', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
-                'ul', 'ol', 'li', 'pre', 'code', 'img', 'button', 'svg', 'path', 
-                'section', 'br', 'strong', 'em', 'i', 'b', 'use', 'article',
-                'table', 'thead', 'tbody', 'tr', 'th', 'td'
-              ]);
-
-              function serializeNode(node) {
-                if (node.nodeType === 3) { // Text node
-                  return node.nodeValue;
-                }
-                if (node.nodeType === 1) { // Element node
-                  const tag = node.tagName.toLowerCase();
-                  
-                  // If it's a code block, format it and skip children
-                  if (node.classList.contains('qwen-markdown-code') || tag === 'pre') {
-                    const langEl = node.querySelector('.qwen-markdown-code-header > div:first-child');
+              if (mdWrapper) {
+                for (const child of mdWrapper.children) {
+                  const codeBlock = child.classList.contains('qwen-markdown-code') ? child : child.querySelector('.qwen-markdown-code');
+                  if (codeBlock || child.tagName === 'PRE') {
+                    const targetBlock = codeBlock || child;
+                    const langEl = targetBlock.querySelector('.qwen-markdown-code-header > div:first-child');
                     const lang = langEl ? langEl.textContent.trim().toLowerCase() : '';
                     
-                    const lineEls = node.querySelectorAll('.view-line');
+                    const lineEls = targetBlock.querySelectorAll('.view-line');
                     let codeLines = [];
                     if (lineEls.length > 0) {
                       lineEls.forEach(el => {
                         codeLines.push(el.textContent);
                       });
                     } else {
-                      const bodyEl = node.querySelector('.qwen-markdown-code-body');
+                      const bodyEl = targetBlock.querySelector('.qwen-markdown-code-body');
                       if (bodyEl) codeLines.push(bodyEl.innerText || bodyEl.textContent);
                     }
-                    return `\n\`\`\`${lang}\n${codeLines.join('\n')}\n\`\`\`\n`;
+                    
+                    parsedText += `\n\`\`\`${lang}\n${codeLines.join('\n')}\n\`\`\`\n`;
+                  } else {
+                    parsedText += child.innerText || child.textContent || '';
+                    parsedText += '\n';
                   }
-
-                  let childText = '';
-                  for (const child of node.childNodes) {
-                    childText += serializeNode(child);
-                  }
-
-                  const isCustomTag = !standardHtmlTags.has(tag);
-                  if (isCustomTag) {
-                    return `<${tag}>${childText}</${tag}>`;
-                  }
-
-                  if (tag === 'p' || tag === 'div' || tag === 'li') {
-                    return childText + '\n';
-                  }
-                  if (tag === 'br') {
-                    return '\n';
-                  }
-                  return childText;
                 }
-                return '';
+              } else {
+                const paragraphs = lastMessage.querySelectorAll('p');
+                paragraphs.forEach(p => {
+                  parsedText += p.innerText || p.textContent || '';
+                  parsedText += '\n';
+                });
               }
 
-              let parsedText = '';
-              for (const child of mdWrapper.childNodes) {
-                parsedText += serializeNode(child);
-              }
-              
-              // Scrape media renders (independent of markdown text existence)
+              // 2. Scrape media renders (independent of markdown text existence)
               const mediaRenderers = lastMessage.querySelectorAll('.chat-response-media-render');
               mediaRenderers.forEach(renderer => {
                 const imgs = renderer.querySelectorAll('img.qwen-image, img.ant-image-img');
@@ -576,130 +552,8 @@ jobs:
             }
           };
 
-          const handleOpenAI = async (req, res) => {
-            const { messages, model } = req.body;
-            if (!messages || messages.length === 0) {
-              return res.status(400).json({ error: "messages array is required" });
-            }
-
-            const userMessages = messages.filter(m => m.role === 'user');
-            if (userMessages.length === 0) {
-              return res.status(400).json({ error: "No user message found" });
-            }
-            const lastMsg = userMessages[userMessages.length - 1];
-            
-            let prompt = '';
-            let image_base64 = null;
-
-            if (typeof lastMsg.content === 'string') {
-              prompt = lastMsg.content;
-            } else if (Array.isArray(lastMsg.content)) {
-              for (const part of lastMsg.content) {
-                if (part.type === 'text') {
-                  prompt += part.text;
-                } else if (part.type === 'image_url') {
-                  image_base64 = part.image_url.url;
-                }
-              }
-            }
-
-            if (!prompt) return res.status(400).json({ error: "Prompt is required" });
-
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache, no-transform');
-            res.setHeader('Connection', 'keep-alive');
-            res.setHeader('X-Accel-Buffering', 'no');
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.flushHeaders();
-
-            const keepalive = setInterval(() => {
-              try { res.write(': ping\n\n'); } catch (_) {}
-            }, 15000);
-
-            const chatId = `chatcmpl-${Date.now()}`;
-            const sendChunk = (content, finishReason = null) => {
-              const payload = {
-                id: chatId,
-                object: "chat.completion.chunk",
-                created: Math.floor(Date.now() / 1000),
-                model: model || "qwen",
-                choices: [{
-                  index: 0,
-                  delta: content ? { content } : {},
-                  finish_reason: finishReason
-                }]
-              };
-              res.write(`data: ${JSON.stringify(payload)}\n\n`);
-            };
-
-            let localImagePath = null;
-            try {
-              try { await page.keyboard.press('Escape'); await sleep(300); } catch (_) {}
-
-              if (image_base64) {
-                localImagePath = await saveImage(image_base64);
-                const uploadResult = await uploadImage(localImagePath);
-                if (!uploadResult.success) {
-                  res.write(`data: ${JSON.stringify({ error: "Image upload failed" })}\n\n`);
-                  clearInterval(keepalive);
-                  res.end();
-                  return;
-                }
-              }
-
-              await setQwenMode("Auto");
-              await setQwenGenerationMode("text", null);
-
-              const prevCount = await getResponseCount();
-              const inputSel = 'textarea.message-input-textarea';
-              await page.waitForSelector(inputSel, { timeout: 20000 });
-              await page.fill(inputSel, prompt);
-              await sleep(600);
-
-              const sendButton = await page.waitForSelector('button.send-button', { state: 'visible', timeout: 10000 });
-              await sendButton.click();
-
-              const deadline = Date.now() + 180000;
-              let lastLength = 0;
-              let stableCount = 0;
-              let lastSeenText = '';
-
-              while (Date.now() < deadline) {
-                await sleep(300);
-                const latestText = await getLastResponseText();
-                if (!latestText) continue;
-
-                if (latestText.length > lastLength) {
-                  const delta = latestText.slice(lastLength);
-                  sendChunk(delta);
-                  lastLength = latestText.length;
-                  lastSeenText = latestText;
-                  stableCount = 0;
-                } else if (latestText === lastSeenText) {
-                  stableCount++;
-                  if (stableCount >= 8) break;
-                } else {
-                  lastSeenText = latestText;
-                  stableCount = 0;
-                }
-              }
-
-              sendChunk(null, "stop");
-              res.write("data: [DONE]\n\n");
-            } catch (err) {
-              console.error("OpenAI Endpoint Error:", err.message);
-            } finally {
-              clearInterval(keepalive);
-              res.end();
-              if (localImagePath && fs.existsSync(localImagePath)) {
-                try { fs.unlinkSync(localImagePath); } catch (_) {}
-              }
-            }
-          };
-
           app.post('/api/qwen', handleChat);
-          app.post('/api/gemini', handleChat);
-          app.post('/v1/chat/completions', handleOpenAI);
+          app.post('/api/gemini', handleChat); // Mirror path for backward compatibility
 
           process.on('SIGINT', async () => {
             if (browser) await browser.close().catch(() => {});
