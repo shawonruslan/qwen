@@ -74,14 +74,14 @@ jobs:
         if: always() # IMPORTANT: Uploads the screenshot even if the login failed
         run: |
           if [ -f screenshot.png ]; then
-            echo "Uploading to file.io..."
+            echo "Uploading to catbox.moe..."
             
-            # Uploads the file using curl and extracts the link using jq
-            URL=$(curl -s -F "file=@screenshot.png" https://file.io | jq -r '.link')
+            # Catbox returns the raw URL directly as text, no JSON parsing needed!
+            URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@screenshot.png" https://catbox.moe/user/api.php)
             
             echo "=========================================="
             echo "✅ Screenshot uploaded successfully!"
-            echo "🔗 View your image here (WARNING: Link expires after 1 click):"
+            echo "🔗 View your image here:"
             echo "$URL"
             echo "=========================================="
           else
