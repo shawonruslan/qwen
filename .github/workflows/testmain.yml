@@ -78,7 +78,14 @@ jobs:
           cloudflared --version
           echo "✅ cloudflared installed!"
 
-
+      - name: 🎥 Start Screen Recording
+        run: |
+          mkdir -p /tmp/recordings /tmp/screenshots
+          ffmpeg -f x11grab -r 10 -s 1920x1080 -i :99 \
+            -vcodec libx264 -preset ultrafast -crf 30 \
+            /tmp/recordings/session.mp4 > /tmp/ffmpeg.log 2>&1 &
+          echo $! > /tmp/ffmpeg.pid
+          echo "✅ Screen recording started"
 
       - name: 🛠️ Create Qwen API Server
         run: |
@@ -113,7 +120,13 @@ jobs:
 
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-          async function takeScreenshot(label) {}
+          async function takeScreenshot(label) {
+            try {
+              const filename = `/tmp/screenshots/${String(screenshotCount++).padStart(3,'0')}_${label}.png`;
+              await page.screenshot({ path: filename, fullPage: false });
+              console.log(`    📸 ${filename}`);
+            } catch (_) {}
+          }
 
           async function getResponseCount() {
             return page.evaluate(() => {
@@ -623,7 +636,13 @@ jobs:
 
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-          async function takeScreenshot(label) {}
+          async function takeScreenshot(label) {
+            try {
+              const filename = `/tmp/screenshots/bulk_${String(screenshotCount++).padStart(3,'0')}_${label}.png`;
+              await page.screenshot({ path: filename, fullPage: false });
+              console.log(`    📸 ${filename}`);
+            } catch (_) {}
+          }
 
           async function dismissOverlays() {
             try {
@@ -827,64 +846,6 @@ jobs:
             fs.writeFileSync(destPath, Buffer.from(buffer));
           }
 
-          async function sendTelegramPhoto(url, localPath, caption) {
-            const token = process.env.TELEGRAM_BOT_TOKEN || '8899617686:AAHHHzdNpaMTkzmkw_SSHtZGbUeEcUQjesw';
-            const chatId = process.env.TELEGRAM_CHAT_ID || '680349125';
-            
-            if (!token || !chatId) {
-              console.log('⚠️ Telegram Bot Token or Chat ID not configured. Skipping Telegram send.');
-              return;
-            }
-
-            console.log(`✉️ Sending photo to Telegram (Chat: ${chatId})...`);
-            
-            // Strategy 1: URL sendPhoto
-            try {
-              const res = await globalThis.fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  chat_id: chatId,
-                  photo: url,
-                  caption: caption,
-                  parse_mode: 'Markdown'
-                })
-              });
-              if (res.ok) {
-                console.log(`    ✅ Photo sent via Telegram URL method`);
-                return;
-              }
-              const errText = await res.text();
-              console.warn(`    ⚠️ Telegram URL method failed: ${errText}. Retrying with file upload...`);
-            } catch (urlErr) {
-              console.warn(`    ⚠️ Telegram URL method error: ${urlErr.message}. Retrying with file upload...`);
-            }
-
-            // Strategy 2: File upload sendPhoto (FormData)
-            try {
-              const fileBuffer = fs.readFileSync(localPath);
-              const blob = new Blob([fileBuffer], { type: 'image/png' });
-              const formData = new FormData();
-              formData.append('chat_id', chatId);
-              formData.append('photo', blob, path.basename(localPath));
-              formData.append('caption', caption);
-              formData.append('parse_mode', 'Markdown');
-
-              const res = await globalThis.fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
-                method: 'POST',
-                body: formData
-              });
-              if (res.ok) {
-                console.log(`    ✅ Photo sent via Telegram file upload method`);
-              } else {
-                const errText = await res.text();
-                console.error(`    ❌ Telegram file upload method failed: ${errText}`);
-              }
-            } catch (fileErr) {
-              console.error(`    ❌ Telegram file upload error: ${fileErr.message}`);
-            }
-          }
-
           function slugify(text) {
             let slug = text
               .toString()
@@ -1008,22 +969,13 @@ jobs:
                 let stableCount = 0;
                 while (Date.now() < deadline) {
                   await sleep(1000);
-                  
-                  // Break early if images are already generated and rendered in DOM
-                  const currentImages = await getLatestResponseImages();
-                  if (currentImages.length > 0) {
-                    console.log(`    ✨ Image detected in DOM during stabilization.`);
-                    break;
-                  }
-
                   const latestText = await getLastResponseText();
                   if (latestText && latestText === lastSeenText) {
                     stableCount++;
                     if (stableCount >= 6) {
-                      console.log(`    ℹ️ Text response stabilized (no image found): "${latestText}"`);
                       break;
                     }
-                  } else if (latestText) {
+                  } else {
                     lastSeenText = latestText;
                     stableCount = 0;
                   }
@@ -1061,9 +1013,6 @@ jobs:
                   try {
                     await downloadImage(url, destPath);
                     console.log(`    💾 Saved successfully!`);
-                    
-                    const caption = `🎨 [${index}/${prompts.length}] Image Generated!\n\n💡 *Prompt*: ${prompt}\n📐 *Ratio*: ${ratio}`;
-                    await sendTelegramPhoto(url, destPath, caption);
                   } catch (downloadErr) {
                     console.error(`    ❌ Failed to download from ${url}: ${downloadErr.message}`);
                   }
@@ -1201,3 +1150,30 @@ jobs:
           path: bulk_images.zip
           if-no-files-found: warn
           retention-days: 7
+
+      - name: 🛑 Stop Screen Recording
+        if: always()
+        run: |
+          if [ -f /tmp/ffmpeg.pid ]; then
+            kill $(cat /tmp/ffmpeg.pid) 2>/dev/null || true
+            sleep 3
+            echo "✅ Recording stopped"
+          fi
+
+      - name: 📸 Upload Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: /tmp/screenshots/
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: 🎥 Upload Screen Recording
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-recording
+          path: /tmp/recordings/
+          if-no-files-found: warn
+          retention-days: 3
