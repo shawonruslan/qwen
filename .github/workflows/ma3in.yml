@@ -1,0 +1,54 @@
+name: WaveSpeed Desktop + Cloudflare Tunnel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y wget curl xvfb
+
+      - name: Download cloudflared
+        run: |
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared-linux-amd64
+          sudo mv cloudflared-linux-amd64 /usr/local/bin/cloudflared
+
+      - name: Install WaveSpeed Desktop
+        run: |
+          wget https://github.com/WaveSpeedAI/wavespeed-desktop/releases/latest/download/WaveSpeed-Desktop-linux-x86_64.AppImage -O wavespeed.AppImage
+          chmod +x wavespeed.AppImage
+
+      - name: Start virtual display
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+
+      - name: Launch app
+        env:
+          DISPLAY: :99
+        run: |
+          ./wavespeed.AppImage &
+          sleep 20
+
+      - name: Start Cloudflare Tunnel
+        run: |
+          cloudflared tunnel --url http://localhost:3000 --no-autoupdate > tunnel.log 2>&1 &
+          sleep 15
+
+          echo "Tunnel URL:"
+          grep -o 'https://[-a-zA-Z0-9.]*trycloudflare.com' tunnel.log | head -1
+
+      - name: Keep Runner Alive
+        run: |
+          while true; do
+            sleep 60
+          done
