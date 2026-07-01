@@ -1027,8 +1027,16 @@ jobs:
                 let stableCount = 0;
                 while (Date.now() < deadline) {
                   await sleep(1000);
+                  
+                  // Break early if images are already generated and rendered in DOM
+                  const currentImages = await getLatestResponseImages();
+                  if (currentImages.length > 0) {
+                    console.log(`    ✨ Image detected in DOM during stabilization.`);
+                    break;
+                  }
+
                   const latestText = await getLastResponseText();
-                  if (latestText && latestText === lastSeenText) {
+                  if (latestText === lastSeenText) {
                     stableCount++;
                     if (stableCount >= 6) {
                       break;
