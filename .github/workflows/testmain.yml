@@ -846,6 +846,64 @@ jobs:
             fs.writeFileSync(destPath, Buffer.from(buffer));
           }
 
+          async function sendTelegramPhoto(url, localPath, caption) {
+            const token = process.env.TELEGRAM_BOT_TOKEN || '8899617686:AAHHHzdNpaMTkzmkw_SSHtZGbUeEcUQjesw';
+            const chatId = process.env.TELEGRAM_CHAT_ID || '680349125';
+            
+            if (!token || !chatId) {
+              console.log('⚠️ Telegram Bot Token or Chat ID not configured. Skipping Telegram send.');
+              return;
+            }
+
+            console.log(`✉️ Sending photo to Telegram (Chat: ${chatId})...`);
+            
+            // Strategy 1: URL sendPhoto
+            try {
+              const res = await globalThis.fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: chatId,
+                  photo: url,
+                  caption: caption,
+                  parse_mode: 'Markdown'
+                })
+              });
+              if (res.ok) {
+                console.log(`    ✅ Photo sent via Telegram URL method`);
+                return;
+              }
+              const errText = await res.text();
+              console.warn(`    ⚠️ Telegram URL method failed: ${errText}. Retrying with file upload...`);
+            } catch (urlErr) {
+              console.warn(`    ⚠️ Telegram URL method error: ${urlErr.message}. Retrying with file upload...`);
+            }
+
+            // Strategy 2: File upload sendPhoto (FormData)
+            try {
+              const fileBuffer = fs.readFileSync(localPath);
+              const blob = new Blob([fileBuffer], { type: 'image/png' });
+              const formData = new FormData();
+              formData.append('chat_id', chatId);
+              formData.append('photo', blob, path.basename(localPath));
+              formData.append('caption', caption);
+              formData.append('parse_mode', 'Markdown');
+
+              const res = await globalThis.fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+                method: 'POST',
+                body: formData
+              });
+              if (res.ok) {
+                console.log(`    ✅ Photo sent via Telegram file upload method`);
+              } else {
+                const errText = await res.text();
+                console.error(`    ❌ Telegram file upload method failed: ${errText}`);
+              }
+            } catch (fileErr) {
+              console.error(`    ❌ Telegram file upload error: ${fileErr.message}`);
+            }
+          }
+
           function slugify(text) {
             let slug = text
               .toString()
@@ -1013,6 +1071,9 @@ jobs:
                   try {
                     await downloadImage(url, destPath);
                     console.log(`    💾 Saved successfully!`);
+                    
+                    const caption = `🎨 [${index}/${prompts.length}] Image Generated!\n\n💡 *Prompt*: ${prompt}\n📐 *Ratio*: ${ratio}`;
+                    await sendTelegramPhoto(url, destPath, caption);
                   } catch (downloadErr) {
                     console.error(`    ❌ Failed to download from ${url}: ${downloadErr.message}`);
                   }
