@@ -3,42 +3,26 @@ name: 🚀 Qwen API Gateway via Cloudflare Tunnel
 on:
   workflow_dispatch:
     inputs:
-      run_mode:
-        description: 'Choose Execution Mode (server or bulk)'
+      mode:
+        description: 'Run mode: persistent API gateway, or one-off bulk image generation'
         required: true
-        default: 'server'
         type: choice
         options:
-          - server
-          - bulk
-      bulk_prompts:
-        description: 'Bulk Prompts (one per line, only used in bulk mode)'
-        required: false
-        type: string
-        default: ''
-      prompts_file:
-        description: 'Path to prompts text file in repo (only used in bulk mode)'
-        required: false
-        type: string
-        default: 'prompts.txt'
+          - api-gateway
+          - bulk-image
+        default: api-gateway
       ratio:
-        description: 'Aspect Ratio (only used in bulk mode)'
+        description: 'Aspect ratio for bulk image generation (e.g. 1:1, 16:9, 9:16, 4:3, 3:4)'
         required: false
-        type: choice
-        default: 'default'
-        options:
-          - default
-          - '1:1'
-          - '3:4'
-          - '4:3'
-          - '16:9'
-          - '9:16'
+        type: string
+        default: '1:1'
 
 permissions:
   contents: write
 
 jobs:
   run-api-gateway:
+    if: ${{ inputs.mode == 'api-gateway' }}
     name: 🌐 Launch Persistent Playwright Qwen API Server + Cloudflare Tunnel
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -64,7 +48,7 @@ jobs:
       - name: 🖥️ Start Virtual Display (Xvfb)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y xvfb
+          sudo apt-get install -y xvfb ffmpeg
           Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
           sleep 3
           echo "DISPLAY=:99" >> $GITHUB_ENV
@@ -78,6 +62,14 @@ jobs:
           cloudflared --version
           echo "✅ cloudflared installed!"
 
+      - name: 🎥 Start Screen Recording
+        run: |
+          mkdir -p /tmp/recordings /tmp/screenshots
+          ffmpeg -f x11grab -r 10 -s 1920x1080 -i :99 \
+            -vcodec libx264 -preset ultrafast -crf 30 \
+            /tmp/recordings/session.mp4 > /tmp/ffmpeg.log 2>&1 &
+          echo $! > /tmp/ffmpeg.pid
+          echo "✅ Screen recording started"
 
       - name: 🛠️ Create Qwen API Server
         run: |
@@ -105,11 +97,20 @@ jobs:
 
           let browser, context, page;
           const PORT = 3000;
+          let screenshotCount = 0;
 
           const QWEN_EMAIL = process.env.QWEN_EMAIL || '';
           const QWEN_PASSWORD = process.env.QWEN_PASSWORD || '';
 
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+          async function takeScreenshot(label) {
+            try {
+              const filename = `/tmp/screenshots/${String(screenshotCount++).padStart(3,'0')}_${label}.png`;
+              await page.screenshot({ path: filename, fullPage: false });
+              console.log(`    📸 ${filename}`);
+            } catch (_) {}
+          }
 
           async function getResponseCount() {
             return page.evaluate(() => {
@@ -217,12 +218,14 @@ jobs:
               timeout: 30000
             });
             await sleep(2000);
+            await takeScreenshot('login_01_start');
 
             try {
               await page.waitForSelector('input[name="email"]', { timeout: 10000 });
               await page.fill('input[name="email"]', QWEN_EMAIL);
               await page.fill('input[name="password"]', QWEN_PASSWORD);
               await sleep(500);
+              await takeScreenshot('login_02_filled');
               
               console.log('    Submitting form and waiting for redirect...');
               await Promise.all([
@@ -230,6 +233,7 @@ jobs:
                 page.press('input[name="password"]', 'Enter')
               ]);
               await sleep(3000);
+              await takeScreenshot('login_03_after_submit');
             } catch (e) {
               console.error('❌ Login fields / submission failed:', e.message);
               throw e;
@@ -240,7 +244,7 @@ jobs:
               await page.waitForSelector('textarea.message-input-textarea', { state: 'visible', timeout: 20000 });
               console.log('✅ Qwen login successful!');
             } catch (e) {
-              console.error('❌ Textarea not visible post-login.');
+              console.error('❌ Textarea not visible post-login. Check login_03_after_submit screenshot.');
               throw e;
             }
           }
@@ -257,6 +261,7 @@ jobs:
 
           async function uploadImage(localImagePath) {
             console.log(`    📎 Uploading: ${path.basename(localImagePath)}`);
+            await takeScreenshot('upload_01_before');
 
             const textareaSel = 'textarea.message-input-textarea';
             try {
@@ -298,6 +303,7 @@ jobs:
 
               if (imageAttached) {
                 console.log('    ✅ Image uploaded via simulated paste');
+                await takeScreenshot('upload_02_paste_success');
                 return { success: true, strategy: 'Clipboard Paste' };
               }
             } catch (e) {
@@ -312,12 +318,14 @@ jobs:
                 await fileInput.setInputFiles(localImagePath);
                 await page.waitForSelector('.vision-item-image', { state: 'visible', timeout: 15000 });
                 console.log('    ✅ Image uploaded via input file fallback');
+                await takeScreenshot('upload_02_input_success');
                 return { success: true, strategy: 'File Input Fallback' };
               }
             } catch (e) {
               console.log(`    ❌ File input fallback failed: ${e.message}`);
             }
 
+            await takeScreenshot('upload_failed');
             return { success: false, strategy: 'none' };
           }
 
@@ -346,6 +354,7 @@ jobs:
               page = await context.newPage();
 
               await qwenLogin();
+              await takeScreenshot('00_qwen_ready');
               console.log("✅ Qwen Ready!");
             } catch (err) {
               console.error("❌ Failed to initialize Qwen:", err.message);
@@ -381,13 +390,13 @@ jobs:
               await page.click(optionSel);
               await sleep(1000);
 
+              await takeScreenshot(`mode_switched_to_${targetMode}`);
               console.log(`✅ Successfully switched mode to ${targetMode}`);
             } catch (e) {
               console.log(`⚠️ Failed to switch Qwen mode: ${e.message}`);
               try { await page.keyboard.press('Escape'); } catch (_) {}
             }
           }
-
 
           async function setQwenGenerationMode(type, ratio) {
             if (!type || type === 'text') {
@@ -448,6 +457,7 @@ jobs:
                 }
                 await sleep(500);
               }
+              await takeScreenshot(`generation_mode_${type}`);
             } catch (e) {
               console.log(`⚠️ Failed to set generation mode: ${e.message}`);
               try { await page.keyboard.press('Escape'); } catch (_) {}
@@ -509,6 +519,7 @@ jobs:
               await page.waitForSelector(inputSel, { timeout: 20000 });
               await page.fill(inputSel, prompt);
               await sleep(600);
+              await takeScreenshot('prompt_before_submit');
 
               // Click send button
               const sendButton = await page.waitForSelector('button.send-button', { state: 'visible', timeout: 10000 });
@@ -531,6 +542,7 @@ jobs:
               }
 
               if (!newResponseAppeared) {
+                await takeScreenshot('no_response');
                 send({ type: 'error', error: 'No response from Qwen' });
                 clearInterval(keepalive);
                 res.end();
@@ -561,11 +573,13 @@ jobs:
                 }
               }
 
+              await takeScreenshot('response_complete');
               send({ type: 'done', full_response: lastSentText });
               console.log("✅ Response complete!");
 
             } catch (err) {
               console.error("❌ Error during chat processing:", err.message);
+              await takeScreenshot('error_state');
               send({ type: 'error', error: err.message });
             } finally {
               clearInterval(keepalive);
@@ -592,421 +606,7 @@ jobs:
           SERVER_EOF
           echo "✅ API Server script created!"
 
-          cat > bulk_generator.mjs << 'BULK_EOF'
-          import { chromium } from 'playwright';
-          import fs from 'fs';
-          import path from 'path';
-          import fetch from 'node-fetch';
-
-          let browser, context, page;
-
-          const QWEN_EMAIL = process.env.QWEN_EMAIL || '';
-          const QWEN_PASSWORD = process.env.QWEN_PASSWORD || '';
-
-          function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-
-          async function dismissOverlays() {
-            try {
-              await page.keyboard.press('Escape');
-              await page.evaluate(() => {
-                const elements = Array.from(document.querySelectorAll('*')).filter(el => {
-                  const classList = Array.from(el.classList || []);
-                  return classList.some(cls => typeof cls === 'string' && (cls.includes('cookie-confirm') || cls.includes('cookie-consent')));
-                });
-                elements.forEach(el => el.remove());
-              });
-              await sleep(300);
-            } catch (_) {}
-          }
-
-          async function qwenLogin() {
-            console.log('🔐 Starting Qwen auto-login...');
-
-            await page.goto('https://chat.qwen.ai/auth', {
-              waitUntil: 'domcontentloaded',
-              timeout: 30000
-            });
-            await sleep(2000);
-
-            try {
-              await page.waitForSelector('input[name="email"]', { timeout: 10000 });
-              await page.fill('input[name="email"]', QWEN_EMAIL);
-              await page.fill('input[name="password"]', QWEN_PASSWORD);
-              await sleep(500);
-              
-              console.log('    Submitting form and waiting for redirect...');
-              await Promise.all([
-                page.waitForURL('https://chat.qwen.ai/**', { waitUntil: 'load', timeout: 30000 }),
-                page.press('input[name="password"]', 'Enter')
-              ]);
-              await sleep(3000);
-            } catch (e) {
-              console.error('❌ Login fields / submission failed:', e.message);
-              throw e;
-            }
-
-            // Verify login success: check if textarea.message-input-textarea exists
-            try {
-              await page.waitForSelector('textarea.message-input-textarea', { state: 'visible', timeout: 20000 });
-              console.log('✅ Qwen login successful!');
-            } catch (e) {
-              console.error('❌ Textarea not visible post-login.');
-              throw e;
-            }
-          }
-
-          async function setQwenGenerationMode(type, ratio) {
-            if (!type || type === 'text') return;
-
-            const targetMode = type.toLowerCase() === 'image' ? 'Create Image' : 'Create Video';
-            console.log(`⚙️ Setting Qwen generation mode to: ${targetMode}`);
-
-            try {
-              await dismissOverlays();
-              const currentModeText = await page.evaluate(() => {
-                const el = document.querySelector('.mode-select-current-mode');
-                return el ? el.textContent.trim() : '';
-              }).catch(() => '');
-
-              if (currentModeText.includes(targetMode)) {
-                console.log(`    Already in ${targetMode} mode.`);
-              } else {
-                const closeBtn = await page.$('.mode-select-current-mode-close');
-                if (closeBtn) {
-                  await closeBtn.click();
-                  await sleep(500);
-                }
-
-                const trigger = await page.waitForSelector('.mode-select-open, .mode-select .ant-dropdown-trigger', { timeout: 10000 });
-                await trigger.click();
-                await sleep(800);
-
-                const option = page.locator('.ant-dropdown-menu-item').filter({ hasText: targetMode }).first();
-                await option.click();
-                await sleep(1000);
-              }
-
-              if (ratio && ratio !== 'default') {
-                console.log(`📐 Setting aspect ratio to: ${ratio}`);
-                const sizeSelector = await page.waitForSelector('.size-selector', { timeout: 8000 });
-                await sizeSelector.click();
-                await sleep(800);
-
-                try {
-                  const ratioOption = page.locator('.ant-dropdown-menu-item').filter({ hasText: ratio }).first();
-                  await ratioOption.click();
-                  console.log(`✅ Ratio set to ${ratio}`);
-                } catch (err) {
-                  console.log(`⚠️ Ratio option ${ratio} not found in dropdown: ${err.message}`);
-                  await page.keyboard.press('Escape');
-                }
-                await sleep(500);
-              }
-            } catch (e) {
-              console.log(`⚠️ Failed to set generation mode: ${e.message}`);
-              try { await page.keyboard.press('Escape'); } catch (_) {}
-            }
-          }
-
-          async function getResponseCount() {
-            return page.evaluate(() => {
-              return document.querySelectorAll('.qwen-chat-message-assistant').length;
-            }).catch(() => 0);
-          }
-
-          async function getLastResponseText() {
-            return page.evaluate(() => {
-              const messages = document.querySelectorAll('.qwen-chat-message-assistant');
-              if (messages.length === 0) return '';
-              const lastMessage = messages[messages.length - 1];
-
-              let parsedText = '';
-              const mdWrapper = lastMessage.querySelector('.qwen-markdown');
-              if (mdWrapper) {
-                for (const child of mdWrapper.children) {
-                  const codeBlock = child.classList.contains('qwen-markdown-code') ? child : child.querySelector('.qwen-markdown-code');
-                  if (codeBlock || child.tagName === 'PRE') {
-                    const targetBlock = codeBlock || child;
-                    const langEl = targetBlock.querySelector('.qwen-markdown-code-header > div:first-child');
-                    const lang = langEl ? langEl.textContent.trim().toLowerCase() : '';
-                    
-                    const lineEls = targetBlock.querySelectorAll('.view-line');
-                    let codeLines = [];
-                    if (lineEls.length > 0) {
-                      lineEls.forEach(el => {
-                        codeLines.push(el.textContent);
-                      });
-                    } else {
-                      const bodyEl = targetBlock.querySelector('.qwen-markdown-code-body');
-                      if (bodyEl) codeLines.push(bodyEl.innerText || bodyEl.textContent);
-                    }
-                    
-                    parsedText += `\n\`\`\`${lang}\n${codeLines.join('\n')}\n\`\`\`\n`;
-                  } else {
-                    parsedText += child.innerText || child.textContent || '';
-                    parsedText += '\n';
-                  }
-                }
-              } else {
-                const paragraphs = lastMessage.querySelectorAll('p');
-                paragraphs.forEach(p => {
-                  parsedText += p.innerText || p.textContent || '';
-                  parsedText += '\n';
-                });
-              }
-              return parsedText.trim();
-            }).catch(() => '');
-          }
-
-          async function getLatestResponseImages() {
-            return page.evaluate(() => {
-              const messages = document.querySelectorAll('.qwen-chat-message-assistant');
-              if (messages.length === 0) return [];
-              const lastMessage = messages[messages.length - 1];
-              
-              const mediaRenderers = lastMessage.querySelectorAll('.chat-response-media-render');
-              const urls = [];
-              mediaRenderers.forEach(renderer => {
-                const imgs = renderer.querySelectorAll('img.qwen-image, img.ant-image-img');
-                imgs.forEach(img => {
-                  if (img.src) {
-                    let cleanSrc = img.src;
-                    try {
-                      const urlObj = new URL(img.src);
-                      if (urlObj.searchParams.has('x-oss-process')) {
-                        urlObj.searchParams.delete('x-oss-process');
-                      }
-                      cleanSrc = urlObj.toString();
-                    } catch (e) {
-                      cleanSrc = img.src.replace(/[&?]x-oss-process=[^&]*/g, '');
-                    }
-                    if (!urls.includes(cleanSrc)) {
-                      urls.push(cleanSrc);
-                    }
-                  }
-                });
-              });
-              return urls;
-            }).catch(() => []);
-          }
-
-          async function downloadImage(url, destPath) {
-            const res = await fetch(url, {
-              headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-              }
-            });
-            if (!res.ok) {
-              throw new Error(`HTTP ${res.status} - ${res.statusText}`);
-            }
-            const buffer = await res.arrayBuffer();
-            fs.writeFileSync(destPath, Buffer.from(buffer));
-          }
-
-          function slugify(text) {
-            let slug = text
-              .toString()
-              .trim()
-              .replace(/\s+/g, '_')
-              .replace(/[\\/:*?"<>|]/g, '');
-            if (slug.length > 50) {
-              slug = slug.substring(0, 50);
-            }
-            return slug || 'image';
-          }
-
-          async function runBulkGeneration() {
-            let promptsStr = '';
-            const promptsFile = process.env.PROMPTS_FILE || '';
-            const ratio = process.env.RATIO || 'default';
-            
-            if (promptsFile && fs.existsSync(promptsFile)) {
-              console.log(`📖 Reading prompts from file: ${promptsFile}`);
-              try {
-                promptsStr = fs.readFileSync(promptsFile, 'utf-8');
-              } catch (fileErr) {
-                console.error(`❌ Failed to read prompts file "${promptsFile}": ${fileErr.message}`);
-              }
-            }
-            
-            if (!promptsStr.trim()) {
-              console.log(`📝 Checking bulk_prompts text input...`);
-              promptsStr = process.env.BULK_PROMPTS || '';
-            }
-            
-            const prompts = promptsStr.split(/\r?\n/).map(p => p.trim()).filter(p => p.length > 0);
-            
-            if (prompts.length === 0) {
-              console.error('❌ No prompts found for bulk generation (checked both file and text input).');
-              process.exit(1);
-            }
-            
-            console.log(`📋 Loaded ${prompts.length} prompts for bulk image generation.`);
-            console.log(`📐 Aspect Ratio set to: ${ratio}`);
-
-            const destDir = path.join(process.cwd(), 'bulk_images');
-            if (!fs.existsSync(destDir)) {
-              fs.mkdirSync(destDir, { recursive: true });
-            }
-
-            console.log('⚡ Launching Chrome...');
-            browser = await chromium.launch({
-              headless: false,
-              channel: 'chrome',
-              args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-web-security',
-                '--window-size=1920,1080'
-              ]
-            });
-
-            context = await browser.newContext({
-              viewport: { width: 1920, height: 1080 },
-              extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
-            });
-
-            // --- Initial login to establish session cookies in the shared context ---
-            page = await context.newPage();
-            await qwenLogin();
-            // Close the initial login tab — session cookies are stored in context
-            await page.close();
-            page = null;
-            
-            for (let i = 0; i < prompts.length; i++) {
-              const prompt = prompts[i];
-              const index = i + 1;
-              console.log(`\n--------------------------------------------`);
-              console.log(`🎨 [${index}/${prompts.length}] Generating image for prompt: "${prompt}"`);
-              
-              // Open a brand new tab (fresh chat) for each prompt
-              const chatPage = await context.newPage();
-              // Temporarily point module-level `page` to this tab so all helpers work
-              page = chatPage;
-              
-              try {
-                // Navigate to a new blank chat
-                await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded', timeout: 30000 });
-                await sleep(2000);
-
-                // Set image generation mode and ratio for this fresh tab
-                await setQwenGenerationMode('image', ratio);
-
-                await dismissOverlays();
-                
-                const inputSel = 'textarea.message-input-textarea';
-                await page.waitForSelector(inputSel, { timeout: 20000 });
-                await page.fill(inputSel, prompt);
-                await sleep(600);
-
-                const prevCount = await getResponseCount();
-                const sendButton = await page.waitForSelector('button.send-button', { state: 'visible', timeout: 10000 });
-                await sendButton.click();
-                
-                const deadline = Date.now() + 180000;
-                let newResponseAppeared = false;
-                while (Date.now() < deadline) {
-                  await sleep(1000);
-                  const currentCount = await getResponseCount();
-                  if (currentCount > prevCount) {
-                    newResponseAppeared = true;
-                    break;
-                  }
-                }
-                
-                if (!newResponseAppeared) {
-                  console.error(`❌ Timeout waiting for Qwen response to start for prompt: "${prompt}"`);
-                  await chatPage.close();
-                  page = null;
-                  continue;
-                }
-                
-                let lastSeenText = '';
-                let stableCount = 0;
-                while (Date.now() < deadline) {
-                  await sleep(1000);
-                  const latestText = await getLastResponseText();
-                  if (latestText && latestText === lastSeenText) {
-                    stableCount++;
-                    if (stableCount >= 6) {
-                      break;
-                    }
-                  } else {
-                    lastSeenText = latestText;
-                    stableCount = 0;
-                  }
-                }
-
-                let imageUrls = [];
-                for (let attempt = 0; attempt < 10; attempt++) {
-                  imageUrls = await getLatestResponseImages();
-                  if (imageUrls.length > 0) {
-                    break;
-                  }
-                  await sleep(1500);
-                }
-                
-                if (imageUrls.length === 0) {
-                  console.warn(`⚠️ No image URLs found for prompt: "${prompt}" after waiting.`);
-                  await chatPage.close();
-                  page = null;
-                  continue;
-                }
-                
-                console.log(`✅ Found ${imageUrls.length} generated image(s)`);
-                
-                const slug = slugify(prompt);
-                for (let j = 0; j < imageUrls.length; j++) {
-                  const url = imageUrls[j];
-                  const filename = imageUrls.length > 1 
-                    ? `${index}_${slug}_${j + 1}.png` 
-                    : `${index}_${slug}.png`;
-                  
-                  const destPath = path.join(destDir, filename);
-                  console.log(`📥 Downloading image to ${filename}...`);
-                  
-                  try {
-                    await downloadImage(url, destPath);
-                    console.log(`    💾 Saved successfully!`);
-                  } catch (downloadErr) {
-                    console.error(`    ❌ Failed to download from ${url}: ${downloadErr.message}`);
-                  }
-                }
-                
-              } catch (err) {
-                console.error(`❌ Error during generation for prompt "${prompt}": ${err.message}`);
-              } finally {
-                // Always close this tab when done with this prompt
-                try { await chatPage.close(); } catch (_) {}
-                page = null;
-                console.log(`🗑️  Closed tab for prompt ${index}/${prompts.length}`);
-                // Small breathing room before next tab opens
-                await sleep(1000);
-              }
-            }
-            
-            console.log(`\n============================================`);
-            console.log(`🎉 Bulk generation completed!`);
-            const files = fs.readdirSync(destDir);
-            console.log(`📂 Images saved in 'bulk_images/': ${files.length} file(s)`);
-            files.forEach(f => console.log(`  - ${f}`));
-            console.log(`============================================`);
-            
-            await browser.close();
-          }
-
-          runBulkGeneration().catch(e => {
-            console.error('❌ Critical failure in bulk generation:', e);
-            process.exit(1);
-          });
-          BULK_EOF
-          echo "✅ Bulk Generator script created!"
-
       - name: 🌐 Start Tunnel & Publish URL to Central Repo
-        if: ${{ github.event.inputs.run_mode == 'server' || github.event.inputs.run_mode == '' }}
         env:
           DISPLAY: :99
           CENTRAL_REPO_TOKEN: ${{ secrets.CENTRAL_REPO_TOKEN }}
@@ -1083,34 +683,353 @@ jobs:
 
           node api_server.mjs
 
-      - name: 🖼️ Run Bulk Image Generation
-        if: ${{ github.event.inputs.run_mode == 'bulk' }}
+      - name: 🛑 Stop Screen Recording
+        if: always()
+        run: |
+          if [ -f /tmp/ffmpeg.pid ]; then
+            kill $(cat /tmp/ffmpeg.pid) 2>/dev/null || true
+            sleep 3
+            echo "✅ Recording stopped"
+          fi
+
+      - name: 📸 Upload Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: /tmp/screenshots/
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: 🎥 Upload Screen Recording
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-recording
+          path: /tmp/recordings/
+          if-no-files-found: warn
+          retention-days: 3
+
+  bulk-image-generation:
+    if: ${{ inputs.mode == 'bulk-image' }}
+    name: 🎨 Bulk Image Generation (fresh session per prompt)
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    steps:
+      - name: 📦 Checkout Repository Code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 📥 Install Node Dependencies
+        run: |
+          npm init -y
+          npm install playwright
+          npx playwright install chrome --with-deps
+
+      - name: 🖥️ Start Virtual Display (Xvfb)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xvfb
+          Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
+          sleep 3
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+          echo "✅ Xvfb started"
+
+      - name: 🛠️ Create Bulk Image Generator Script
+        run: |
+          mkdir -p /tmp/bulk_images
+          cat > bulk_image_generator.mjs << 'BULK_EOF'
+          import { chromium } from 'playwright';
+          import fs from 'fs';
+          import path from 'path';
+
+          const QWEN_EMAIL = process.env.QWEN_EMAIL || '';
+          const QWEN_PASSWORD = process.env.QWEN_PASSWORD || '';
+          const RATIO = process.env.RATIO || '1:1';
+          const OUTPUT_DIR = '/tmp/bulk_images';
+          const PROMPTS_FILE = path.join(process.cwd(), 'prompts.txt');
+
+          if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+
+          function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+          function slugify(text, maxLen = 40) {
+            return text
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '_')
+              .replace(/^_+|_+$/g, '')
+              .slice(0, maxLen) || 'prompt';
+          }
+
+          async function dismissOverlays(page) {
+            try {
+              await page.keyboard.press('Escape');
+              await page.evaluate(() => {
+                const els = Array.from(document.querySelectorAll('*')).filter(el => {
+                  const cl = Array.from(el.classList || []);
+                  return cl.some(c => typeof c === 'string' && (c.includes('cookie-confirm') || c.includes('cookie-consent')));
+                });
+                els.forEach(el => el.remove());
+              });
+              await sleep(300);
+            } catch (_) {}
+          }
+
+          async function qwenLogin(page) {
+            console.log('  🔐 Logging in to Qwen...');
+            await page.goto('https://chat.qwen.ai/auth', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await sleep(2000);
+
+            await page.waitForSelector('input[name="email"]', { timeout: 10000 });
+            await page.fill('input[name="email"]', QWEN_EMAIL);
+            await page.fill('input[name="password"]', QWEN_PASSWORD);
+            await sleep(500);
+
+            await Promise.all([
+              page.waitForURL('https://chat.qwen.ai/**', { waitUntil: 'load', timeout: 30000 }),
+              page.press('input[name="password"]', 'Enter')
+            ]);
+            await sleep(3000);
+
+            await page.waitForSelector('textarea.message-input-textarea', { state: 'visible', timeout: 20000 });
+            console.log('  ✅ Login successful');
+          }
+
+          async function setImageGenerationMode(page, ratio) {
+            console.log(`  ⚙️ Switching to Create Image mode (ratio: ${ratio})...`);
+            await dismissOverlays(page);
+
+            const trigger = await page.waitForSelector('.mode-select-open, .mode-select .ant-dropdown-trigger', { timeout: 10000 });
+            await trigger.click();
+            await sleep(800);
+
+            const option = page.locator('.ant-dropdown-menu-item').filter({ hasText: 'Create Image' }).first();
+            await option.click();
+            await sleep(1000);
+
+            if (ratio) {
+              try {
+                const sizeSelector = await page.waitForSelector('.size-selector', { timeout: 8000 });
+                await sizeSelector.click();
+                await sleep(800);
+                const ratioOption = page.locator('.ant-dropdown-menu-item').filter({ hasText: ratio }).first();
+                await ratioOption.click();
+                await sleep(500);
+                console.log(`  ✅ Ratio set to ${ratio}`);
+              } catch (e) {
+                console.log(`  ⚠️ Could not set ratio "${ratio}": ${e.message}`);
+                await page.keyboard.press('Escape');
+              }
+            }
+          }
+
+          async function getResponseCount(page) {
+            return page.evaluate(() => document.querySelectorAll('.qwen-chat-message-assistant').length).catch(() => 0);
+          }
+
+          async function getLastResponseImageUrls(page) {
+            return page.evaluate(() => {
+              const messages = document.querySelectorAll('.qwen-chat-message-assistant');
+              if (messages.length === 0) return [];
+              const lastMessage = messages[messages.length - 1];
+              const urls = [];
+              const mediaRenderers = lastMessage.querySelectorAll('.chat-response-media-render');
+              mediaRenderers.forEach(renderer => {
+                const imgs = renderer.querySelectorAll('img.qwen-image, img.ant-image-img');
+                imgs.forEach(img => {
+                  if (img.src) {
+                    let cleanSrc = img.src;
+                    try {
+                      const urlObj = new URL(img.src);
+                      if (urlObj.searchParams.has('x-oss-process')) urlObj.searchParams.delete('x-oss-process');
+                      cleanSrc = urlObj.toString();
+                    } catch (e) {
+                      cleanSrc = img.src.replace(/[&?]x-oss-process=[^&]*/g, '');
+                    }
+                    if (!urls.includes(cleanSrc)) urls.push(cleanSrc);
+                  }
+                });
+              });
+              return urls;
+            }).catch(() => []);
+          }
+
+          async function waitForImages(page, prevCount, timeoutMs = 180000) {
+            const deadline = Date.now() + timeoutMs;
+
+            while (Date.now() < deadline) {
+              await sleep(1000);
+              const currentCount = await getResponseCount(page);
+              if (currentCount > prevCount) break;
+            }
+
+            let lastUrls = [];
+            let stableCount = 0;
+            while (Date.now() < deadline) {
+              await sleep(1500);
+              const urls = await getLastResponseImageUrls(page);
+              if (urls.length > 0 && JSON.stringify(urls) === JSON.stringify(lastUrls)) {
+                stableCount++;
+                if (stableCount >= 3) return urls;
+              } else {
+                lastUrls = urls;
+                stableCount = 0;
+              }
+            }
+            return lastUrls;
+          }
+
+          async function downloadImage(url, filepath) {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
+            const buffer = Buffer.from(await res.arrayBuffer());
+            fs.writeFileSync(filepath, buffer);
+          }
+
+          async function generateImageForPrompt(promptText, index, ratio) {
+            console.log(`\n[${index}] 🎨 Prompt: ${promptText.substring(0, 80)}...`);
+            let browser;
+            try {
+              browser = await chromium.launch({
+                headless: false,
+                channel: 'chrome',
+                args: [
+                  '--no-sandbox',
+                  '--disable-setuid-sandbox',
+                  '--disable-dev-shm-usage',
+                  '--disable-blink-features=AutomationControlled',
+                  '--disable-web-security',
+                  '--window-size=1920,1080'
+                ]
+              });
+
+              const context = await browser.newContext({
+                viewport: { width: 1920, height: 1080 },
+                extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
+              });
+              const page = await context.newPage();
+
+              await qwenLogin(page);
+              await setImageGenerationMode(page, ratio);
+
+              const prevCount = await getResponseCount(page);
+
+              const inputSel = 'textarea.message-input-textarea';
+              await page.waitForSelector(inputSel, { timeout: 20000 });
+              await page.fill(inputSel, promptText);
+              await sleep(600);
+
+              const sendButton = await page.waitForSelector('button.send-button', { state: 'visible', timeout: 10000 });
+              await sendButton.click();
+
+              console.log(`  📤 Prompt submitted, waiting for image generation...`);
+              const urls = await waitForImages(page, prevCount);
+
+              if (urls.length === 0) {
+                console.log(`  ❌ No image generated for prompt ${index}`);
+                return { index, promptText, success: false, files: [] };
+              }
+
+              const slug = slugify(promptText);
+              const files = [];
+              for (let i = 0; i < urls.length; i++) {
+                const url = urls[i];
+                let ext = '.jpg';
+                try {
+                  const u = new URL(url);
+                  const m = u.pathname.match(/\.(png|jpg|jpeg|webp)$/i);
+                  if (m) ext = `.${m[1].toLowerCase()}`;
+                } catch (_) {}
+                const filename = `${String(index).padStart(3, '0')}_${slug}${urls.length > 1 ? `_${i + 1}` : ''}${ext}`;
+                const filepath = path.join(OUTPUT_DIR, filename);
+                await downloadImage(url, filepath);
+                console.log(`  ✅ Downloaded: ${filename}`);
+                files.push(filename);
+              }
+
+              return { index, promptText, success: true, files };
+            } catch (err) {
+              console.error(`  ❌ Error on prompt ${index}: ${err.message}`);
+              return { index, promptText, success: false, error: err.message, files: [] };
+            } finally {
+              if (browser) await browser.close().catch(() => {});
+            }
+          }
+
+          async function main() {
+            if (!fs.existsSync(PROMPTS_FILE)) {
+              console.error(`❌ prompts.txt not found at repo root: ${PROMPTS_FILE}`);
+              process.exit(1);
+            }
+
+            const prompts = fs.readFileSync(PROMPTS_FILE, 'utf-8')
+              .split('\n')
+              .map(l => l.trim())
+              .filter(l => l.length > 0 && !l.startsWith('#'));
+
+            if (prompts.length === 0) {
+              console.error('❌ No prompts found in prompts.txt');
+              process.exit(1);
+            }
+
+            console.log(`📋 Found ${prompts.length} prompt(s). Ratio: ${RATIO}\n`);
+
+            const results = [];
+            for (let i = 0; i < prompts.length; i++) {
+              const result = await generateImageForPrompt(prompts[i], i + 1, RATIO);
+              results.push(result);
+              await sleep(1000);
+            }
+
+            const summary = {
+              total: prompts.length,
+              succeeded: results.filter(r => r.success).length,
+              failed: results.filter(r => !r.success).length,
+              results
+            };
+            fs.writeFileSync(path.join(OUTPUT_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
+
+            console.log(`\n===============================`);
+            console.log(`✅ Done: ${summary.succeeded}/${summary.total} succeeded`);
+            console.log(`===============================`);
+          }
+
+          main().catch(err => {
+            console.error('❌ Fatal error:', err);
+            process.exit(1);
+          });
+          BULK_EOF
+          echo "✅ Bulk image generator script created!"
+
+      - name: 🎨 Run Bulk Image Generation
         env:
           DISPLAY: :99
           QWEN_EMAIL: ${{ secrets.QWEN_EMAIL }}
           QWEN_PASSWORD: ${{ secrets.QWEN_PASSWORD }}
-          BULK_PROMPTS: ${{ github.event.inputs.bulk_prompts }}
-          PROMPTS_FILE: ${{ github.event.inputs.prompts_file }}
-          RATIO: ${{ github.event.inputs.ratio }}
-        run: |
-          echo "🖼️ Running bulk image generation..."
-          node bulk_generator.mjs
+          RATIO: ${{ inputs.ratio }}
+        run: node bulk_image_generator.mjs
 
-      - name: 📦 Zip Generated Images
-        if: ${{ always() && github.event.inputs.run_mode == 'bulk' }}
+      - name: 🗜️ Zip Generated Images
+        if: always()
         run: |
-          if [ -d "bulk_images" ] && [ "$(ls -A bulk_images)" ]; then
-            echo "📦 Zipping generated images..."
-            zip -r bulk_images.zip bulk_images/
+          if [ -d /tmp/bulk_images ] && [ "$(ls -A /tmp/bulk_images)" ]; then
+            cd /tmp/bulk_images
+            zip -r /tmp/generated_images.zip .
+            echo "✅ Zipped $(ls | wc -l) file(s)"
           else
-            echo "⚠️ No images generated to zip."
+            echo "⚠️ No images were generated, skipping zip"
           fi
 
-      - name: 📤 Upload Bulk Images Artifact
-        if: ${{ always() && github.event.inputs.run_mode == 'bulk' }}
+      - name: 📦 Upload Generated Images
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bulk-generated-images
-          path: bulk_images.zip
+          name: generated-images
+          path: /tmp/generated_images.zip
           if-no-files-found: warn
           retention-days: 7
