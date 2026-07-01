@@ -64,7 +64,7 @@ jobs:
       - name: 🖥️ Start Virtual Display (Xvfb)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y xvfb ffmpeg
+          sudo apt-get install -y xvfb
           Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
           sleep 3
           echo "DISPLAY=:99" >> $GITHUB_ENV
@@ -78,14 +78,6 @@ jobs:
           cloudflared --version
           echo "✅ cloudflared installed!"
 
-      - name: 🎥 Start Screen Recording
-        run: |
-          mkdir -p /tmp/recordings /tmp/screenshots
-          ffmpeg -f x11grab -r 10 -s 1920x1080 -i :99 \
-            -vcodec libx264 -preset ultrafast -crf 30 \
-            /tmp/recordings/session.mp4 > /tmp/ffmpeg.log 2>&1 &
-          echo $! > /tmp/ffmpeg.pid
-          echo "✅ Screen recording started"
 
       - name: 🛠️ Create Qwen API Server
         run: |
@@ -113,20 +105,11 @@ jobs:
 
           let browser, context, page;
           const PORT = 3000;
-          let screenshotCount = 0;
 
           const QWEN_EMAIL = process.env.QWEN_EMAIL || '';
           const QWEN_PASSWORD = process.env.QWEN_PASSWORD || '';
 
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-          async function takeScreenshot(label) {
-            try {
-              const filename = `/tmp/screenshots/${String(screenshotCount++).padStart(3,'0')}_${label}.png`;
-              await page.screenshot({ path: filename, fullPage: false });
-              console.log(`    📸 ${filename}`);
-            } catch (_) {}
-          }
 
           async function getResponseCount() {
             return page.evaluate(() => {
@@ -234,14 +217,12 @@ jobs:
               timeout: 30000
             });
             await sleep(2000);
-            await takeScreenshot('login_01_start');
 
             try {
               await page.waitForSelector('input[name="email"]', { timeout: 10000 });
               await page.fill('input[name="email"]', QWEN_EMAIL);
               await page.fill('input[name="password"]', QWEN_PASSWORD);
               await sleep(500);
-              await takeScreenshot('login_02_filled');
               
               console.log('    Submitting form and waiting for redirect...');
               await Promise.all([
@@ -249,7 +230,6 @@ jobs:
                 page.press('input[name="password"]', 'Enter')
               ]);
               await sleep(3000);
-              await takeScreenshot('login_03_after_submit');
             } catch (e) {
               console.error('❌ Login fields / submission failed:', e.message);
               throw e;
@@ -260,7 +240,7 @@ jobs:
               await page.waitForSelector('textarea.message-input-textarea', { state: 'visible', timeout: 20000 });
               console.log('✅ Qwen login successful!');
             } catch (e) {
-              console.error('❌ Textarea not visible post-login. Check login_03_after_submit screenshot.');
+              console.error('❌ Textarea not visible post-login.');
               throw e;
             }
           }
@@ -277,7 +257,6 @@ jobs:
 
           async function uploadImage(localImagePath) {
             console.log(`    📎 Uploading: ${path.basename(localImagePath)}`);
-            await takeScreenshot('upload_01_before');
 
             const textareaSel = 'textarea.message-input-textarea';
             try {
@@ -319,7 +298,6 @@ jobs:
 
               if (imageAttached) {
                 console.log('    ✅ Image uploaded via simulated paste');
-                await takeScreenshot('upload_02_paste_success');
                 return { success: true, strategy: 'Clipboard Paste' };
               }
             } catch (e) {
@@ -334,14 +312,12 @@ jobs:
                 await fileInput.setInputFiles(localImagePath);
                 await page.waitForSelector('.vision-item-image', { state: 'visible', timeout: 15000 });
                 console.log('    ✅ Image uploaded via input file fallback');
-                await takeScreenshot('upload_02_input_success');
                 return { success: true, strategy: 'File Input Fallback' };
               }
             } catch (e) {
               console.log(`    ❌ File input fallback failed: ${e.message}`);
             }
 
-            await takeScreenshot('upload_failed');
             return { success: false, strategy: 'none' };
           }
 
@@ -370,7 +346,6 @@ jobs:
               page = await context.newPage();
 
               await qwenLogin();
-              await takeScreenshot('00_qwen_ready');
               console.log("✅ Qwen Ready!");
             } catch (err) {
               console.error("❌ Failed to initialize Qwen:", err.message);
@@ -406,13 +381,13 @@ jobs:
               await page.click(optionSel);
               await sleep(1000);
 
-              await takeScreenshot(`mode_switched_to_${targetMode}`);
               console.log(`✅ Successfully switched mode to ${targetMode}`);
             } catch (e) {
               console.log(`⚠️ Failed to switch Qwen mode: ${e.message}`);
               try { await page.keyboard.press('Escape'); } catch (_) {}
             }
           }
+
 
           async function setQwenGenerationMode(type, ratio) {
             if (!type || type === 'text') {
@@ -473,7 +448,6 @@ jobs:
                 }
                 await sleep(500);
               }
-              await takeScreenshot(`generation_mode_${type}`);
             } catch (e) {
               console.log(`⚠️ Failed to set generation mode: ${e.message}`);
               try { await page.keyboard.press('Escape'); } catch (_) {}
@@ -535,7 +509,6 @@ jobs:
               await page.waitForSelector(inputSel, { timeout: 20000 });
               await page.fill(inputSel, prompt);
               await sleep(600);
-              await takeScreenshot('prompt_before_submit');
 
               // Click send button
               const sendButton = await page.waitForSelector('button.send-button', { state: 'visible', timeout: 10000 });
@@ -558,7 +531,6 @@ jobs:
               }
 
               if (!newResponseAppeared) {
-                await takeScreenshot('no_response');
                 send({ type: 'error', error: 'No response from Qwen' });
                 clearInterval(keepalive);
                 res.end();
@@ -589,13 +561,11 @@ jobs:
                 }
               }
 
-              await takeScreenshot('response_complete');
               send({ type: 'done', full_response: lastSentText });
               console.log("✅ Response complete!");
 
             } catch (err) {
               console.error("❌ Error during chat processing:", err.message);
-              await takeScreenshot('error_state');
               send({ type: 'error', error: err.message });
             } finally {
               clearInterval(keepalive);
@@ -629,20 +599,12 @@ jobs:
           import fetch from 'node-fetch';
 
           let browser, context, page;
-          let screenshotCount = 0;
 
           const QWEN_EMAIL = process.env.QWEN_EMAIL || '';
           const QWEN_PASSWORD = process.env.QWEN_PASSWORD || '';
 
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-          async function takeScreenshot(label) {
-            try {
-              const filename = `/tmp/screenshots/bulk_${String(screenshotCount++).padStart(3,'0')}_${label}.png`;
-              await page.screenshot({ path: filename, fullPage: false });
-              console.log(`    📸 ${filename}`);
-            } catch (_) {}
-          }
 
           async function dismissOverlays() {
             try {
@@ -666,14 +628,12 @@ jobs:
               timeout: 30000
             });
             await sleep(2000);
-            await takeScreenshot('login_01_start');
 
             try {
               await page.waitForSelector('input[name="email"]', { timeout: 10000 });
               await page.fill('input[name="email"]', QWEN_EMAIL);
               await page.fill('input[name="password"]', QWEN_PASSWORD);
               await sleep(500);
-              await takeScreenshot('login_02_filled');
               
               console.log('    Submitting form and waiting for redirect...');
               await Promise.all([
@@ -681,7 +641,6 @@ jobs:
                 page.press('input[name="password"]', 'Enter')
               ]);
               await sleep(3000);
-              await takeScreenshot('login_03_after_submit');
             } catch (e) {
               console.error('❌ Login fields / submission failed:', e.message);
               throw e;
@@ -692,7 +651,7 @@ jobs:
               await page.waitForSelector('textarea.message-input-textarea', { state: 'visible', timeout: 20000 });
               console.log('✅ Qwen login successful!');
             } catch (e) {
-              console.error('❌ Textarea not visible post-login. Check login_03_after_submit screenshot.');
+              console.error('❌ Textarea not visible post-login.');
               throw e;
             }
           }
@@ -744,7 +703,6 @@ jobs:
                 }
                 await sleep(500);
               }
-              await takeScreenshot(`generation_mode_${type}`);
             } catch (e) {
               console.log(`⚠️ Failed to set generation mode: ${e.message}`);
               try { await page.keyboard.press('Escape'); } catch (_) {}
@@ -911,42 +869,40 @@ jobs:
               extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
             });
 
+            // --- Initial login to establish session cookies in the shared context ---
             page = await context.newPage();
-            
             await qwenLogin();
-
+            // Close the initial login tab — session cookies are stored in context
+            await page.close();
+            page = null;
+            
             for (let i = 0; i < prompts.length; i++) {
               const prompt = prompts[i];
               const index = i + 1;
               console.log(`\n--------------------------------------------`);
               console.log(`🎨 [${index}/${prompts.length}] Generating image for prompt: "${prompt}"`);
               
+              // Open a brand new tab (fresh chat) for each prompt
+              const chatPage = await context.newPage();
+              // Temporarily point module-level `page` to this tab so all helpers work
+              page = chatPage;
+              
               try {
-                await dismissOverlays();
+                // Navigate to a new blank chat
+                await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded', timeout: 30000 });
+                await sleep(2000);
 
-                // ── Open a fresh New Chat for each prompt ──
-                console.log(`    🆕 Opening new chat for clean generation...`);
-                try {
-                  const newChatBtn = await page.waitForSelector(
-                    '.sidebar-entry-fixed-list-content',
-                    { state: 'visible', timeout: 10000 }
-                  );
-                  await newChatBtn.click();
-                  await sleep(1500);
-                  console.log(`    ✅ New chat opened`);
-                } catch (e) {
-                  console.log(`    ⚠️ Could not click New Chat button: ${e.message}. Continuing anyway...`);
-                }
-
-                // ── Re-set image generation mode in the new chat ──
+                // Set image generation mode and ratio for this fresh tab
                 await setQwenGenerationMode('image', ratio);
+
+                await dismissOverlays();
                 
                 const inputSel = 'textarea.message-input-textarea';
                 await page.waitForSelector(inputSel, { timeout: 20000 });
                 await page.fill(inputSel, prompt);
                 await sleep(600);
-                await takeScreenshot(`prompt_${index}_before_submit`);
-                
+
+                const prevCount = await getResponseCount();
                 const sendButton = await page.waitForSelector('button.send-button', { state: 'visible', timeout: 10000 });
                 await sendButton.click();
                 
@@ -955,7 +911,7 @@ jobs:
                 while (Date.now() < deadline) {
                   await sleep(1000);
                   const currentCount = await getResponseCount();
-                  if (currentCount > 0) {
+                  if (currentCount > prevCount) {
                     newResponseAppeared = true;
                     break;
                   }
@@ -963,7 +919,8 @@ jobs:
                 
                 if (!newResponseAppeared) {
                   console.error(`❌ Timeout waiting for Qwen response to start for prompt: "${prompt}"`);
-                  await takeScreenshot(`prompt_${index}_error_start`);
+                  await chatPage.close();
+                  page = null;
                   continue;
                 }
                 
@@ -982,9 +939,7 @@ jobs:
                     stableCount = 0;
                   }
                 }
-                
-                await takeScreenshot(`prompt_${index}_stabilized`);
-                
+
                 let imageUrls = [];
                 for (let attempt = 0; attempt < 10; attempt++) {
                   imageUrls = await getLatestResponseImages();
@@ -996,7 +951,8 @@ jobs:
                 
                 if (imageUrls.length === 0) {
                   console.warn(`⚠️ No image URLs found for prompt: "${prompt}" after waiting.`);
-                  await takeScreenshot(`prompt_${index}_no_images`);
+                  await chatPage.close();
+                  page = null;
                   continue;
                 }
                 
@@ -1022,7 +978,13 @@ jobs:
                 
               } catch (err) {
                 console.error(`❌ Error during generation for prompt "${prompt}": ${err.message}`);
-                await takeScreenshot(`prompt_${index}_error_catch`);
+              } finally {
+                // Always close this tab when done with this prompt
+                try { await chatPage.close(); } catch (_) {}
+                page = null;
+                console.log(`🗑️  Closed tab for prompt ${index}/${prompts.length}`);
+                // Small breathing room before next tab opens
+                await sleep(1000);
               }
             }
             
@@ -1152,30 +1114,3 @@ jobs:
           path: bulk_images.zip
           if-no-files-found: warn
           retention-days: 7
-
-      - name: 🛑 Stop Screen Recording
-        if: always()
-        run: |
-          if [ -f /tmp/ffmpeg.pid ]; then
-            kill $(cat /tmp/ffmpeg.pid) 2>/dev/null || true
-            sleep 3
-            echo "✅ Recording stopped"
-          fi
-
-      - name: 📸 Upload Screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-screenshots
-          path: /tmp/screenshots/
-          if-no-files-found: warn
-          retention-days: 3
-
-      - name: 🎥 Upload Screen Recording
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: screen-recording
-          path: /tmp/recordings/
-          if-no-files-found: warn
-          retention-days: 3
