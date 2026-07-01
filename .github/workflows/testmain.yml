@@ -78,14 +78,7 @@ jobs:
           cloudflared --version
           echo "✅ cloudflared installed!"
 
-      - name: 🎥 Start Screen Recording
-        run: |
-          mkdir -p /tmp/recordings /tmp/screenshots
-          ffmpeg -f x11grab -r 10 -s 1920x1080 -i :99 \
-            -vcodec libx264 -preset ultrafast -crf 30 \
-            /tmp/recordings/session.mp4 > /tmp/ffmpeg.log 2>&1 &
-          echo $! > /tmp/ffmpeg.pid
-          echo "✅ Screen recording started"
+
 
       - name: 🛠️ Create Qwen API Server
         run: |
@@ -120,13 +113,7 @@ jobs:
 
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-          async function takeScreenshot(label) {
-            try {
-              const filename = `/tmp/screenshots/${String(screenshotCount++).padStart(3,'0')}_${label}.png`;
-              await page.screenshot({ path: filename, fullPage: false });
-              console.log(`    📸 ${filename}`);
-            } catch (_) {}
-          }
+          async function takeScreenshot(label) {}
 
           async function getResponseCount() {
             return page.evaluate(() => {
@@ -636,13 +623,7 @@ jobs:
 
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-          async function takeScreenshot(label) {
-            try {
-              const filename = `/tmp/screenshots/bulk_${String(screenshotCount++).padStart(3,'0')}_${label}.png`;
-              await page.screenshot({ path: filename, fullPage: false });
-              console.log(`    📸 ${filename}`);
-            } catch (_) {}
-          }
+          async function takeScreenshot(label) {}
 
           async function dismissOverlays() {
             try {
@@ -1036,12 +1017,13 @@ jobs:
                   }
 
                   const latestText = await getLastResponseText();
-                  if (latestText === lastSeenText) {
+                  if (latestText && latestText === lastSeenText) {
                     stableCount++;
                     if (stableCount >= 6) {
+                      console.log(`    ℹ️ Text response stabilized (no image found): "${latestText}"`);
                       break;
                     }
-                  } else {
+                  } else if (latestText) {
                     lastSeenText = latestText;
                     stableCount = 0;
                   }
@@ -1219,30 +1201,3 @@ jobs:
           path: bulk_images.zip
           if-no-files-found: warn
           retention-days: 7
-
-      - name: 🛑 Stop Screen Recording
-        if: always()
-        run: |
-          if [ -f /tmp/ffmpeg.pid ]; then
-            kill $(cat /tmp/ffmpeg.pid) 2>/dev/null || true
-            sleep 3
-            echo "✅ Recording stopped"
-          fi
-
-      - name: 📸 Upload Screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-screenshots
-          path: /tmp/screenshots/
-          if-no-files-found: warn
-          retention-days: 3
-
-      - name: 🎥 Upload Screen Recording
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: screen-recording
-          path: /tmp/recordings/
-          if-no-files-found: warn
-          retention-days: 3
