@@ -914,7 +914,6 @@ jobs:
             page = await context.newPage();
             
             await qwenLogin();
-            await setQwenGenerationMode('image', ratio);
             
             for (let i = 0; i < prompts.length; i++) {
               const prompt = prompts[i];
@@ -924,6 +923,20 @@ jobs:
               
               try {
                 await dismissOverlays();
+                
+                // Click "New Chat" button to start a fresh session for each prompt
+                console.log('➕ Starting a new chat session...');
+                try {
+                  const newChatBtn = page.locator('.sidebar-entry-fixed-list-content').filter({ hasText: 'New Chat' }).first();
+                  await newChatBtn.click();
+                  await sleep(2000);
+                } catch (newChatErr) {
+                  console.warn(`⚠️ Failed to trigger New Chat button: ${newChatErr.message}. Proceeding anyway...`);
+                }
+
+                // Re-enable image generation mode and ratio for the new chat session
+                await setQwenGenerationMode('image', ratio);
+                
                 const prevCount = await getResponseCount();
                 
                 const inputSel = 'textarea.message-input-textarea';
