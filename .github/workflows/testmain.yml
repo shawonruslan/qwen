@@ -16,6 +16,11 @@ on:
         required: false
         type: string
         default: ''
+      prompts_file:
+        description: 'Path to prompts text file in repo (only used in bulk mode)'
+        required: false
+        type: string
+        default: 'prompts.txt'
       ratio:
         description: 'Aspect Ratio (only used in bulk mode)'
         required: false
@@ -854,13 +859,28 @@ jobs:
           }
 
           async function runBulkGeneration() {
-            const promptsStr = process.env.BULK_PROMPTS || '';
+            let promptsStr = '';
+            const promptsFile = process.env.PROMPTS_FILE || '';
             const ratio = process.env.RATIO || 'default';
             
-            const prompts = promptsStr.split('\n').map(p => p.trim()).filter(p => p.length > 0);
+            if (promptsFile && fs.existsSync(promptsFile)) {
+              console.log(`📖 Reading prompts from file: ${promptsFile}`);
+              try {
+                promptsStr = fs.readFileSync(promptsFile, 'utf-8');
+              } catch (fileErr) {
+                console.error(`❌ Failed to read prompts file "${promptsFile}": ${fileErr.message}`);
+              }
+            }
+            
+            if (!promptsStr.trim()) {
+              console.log(`📝 Checking bulk_prompts text input...`);
+              promptsStr = process.env.BULK_PROMPTS || '';
+            }
+            
+            const prompts = promptsStr.split(/\r?\n/).map(p => p.trim()).filter(p => p.length > 0);
             
             if (prompts.length === 0) {
-              console.error('❌ No prompts provided for bulk generation.');
+              console.error('❌ No prompts found for bulk generation (checked both file and text input).');
               process.exit(1);
             }
             
@@ -1093,6 +1113,7 @@ jobs:
           QWEN_EMAIL: ${{ secrets.QWEN_EMAIL }}
           QWEN_PASSWORD: ${{ secrets.QWEN_PASSWORD }}
           BULK_PROMPTS: ${{ github.event.inputs.bulk_prompts }}
+          PROMPTS_FILE: ${{ github.event.inputs.prompts_file }}
           RATIO: ${{ github.event.inputs.ratio }}
         run: |
           echo "🖼️ Running bulk image generation..."
