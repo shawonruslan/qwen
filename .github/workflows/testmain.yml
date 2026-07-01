@@ -914,7 +914,7 @@ jobs:
             page = await context.newPage();
             
             await qwenLogin();
-            
+
             for (let i = 0; i < prompts.length; i++) {
               const prompt = prompts[i];
               const index = i + 1;
@@ -923,21 +923,23 @@ jobs:
               
               try {
                 await dismissOverlays();
-                
-                // Click "New Chat" button to start a fresh session for each prompt
-                console.log('➕ Starting a new chat session...');
+
+                // ── Open a fresh New Chat for each prompt ──
+                console.log(`    🆕 Opening new chat for clean generation...`);
                 try {
-                  const newChatBtn = page.locator('.sidebar-entry-fixed-list-content').filter({ hasText: 'New Chat' }).first();
+                  const newChatBtn = await page.waitForSelector(
+                    '.sidebar-entry-fixed-list-content',
+                    { state: 'visible', timeout: 10000 }
+                  );
                   await newChatBtn.click();
-                  await sleep(2000);
-                } catch (newChatErr) {
-                  console.warn(`⚠️ Failed to trigger New Chat button: ${newChatErr.message}. Proceeding anyway...`);
+                  await sleep(1500);
+                  console.log(`    ✅ New chat opened`);
+                } catch (e) {
+                  console.log(`    ⚠️ Could not click New Chat button: ${e.message}. Continuing anyway...`);
                 }
 
-                // Re-enable image generation mode and ratio for the new chat session
+                // ── Re-set image generation mode in the new chat ──
                 await setQwenGenerationMode('image', ratio);
-                
-                const prevCount = await getResponseCount();
                 
                 const inputSel = 'textarea.message-input-textarea';
                 await page.waitForSelector(inputSel, { timeout: 20000 });
@@ -953,7 +955,7 @@ jobs:
                 while (Date.now() < deadline) {
                   await sleep(1000);
                   const currentCount = await getResponseCount();
-                  if (currentCount > prevCount) {
+                  if (currentCount > 0) {
                     newResponseAppeared = true;
                     break;
                   }
